@@ -93,24 +93,34 @@ def is_response_worthy(transcript: str) -> bool:
     return len(text.split()) >= 6
 
 
-def pick_responder(transcript: str, *, default_chair: str = "fred") -> str | None:
+def pick_responder(
+    transcript: str,
+    *,
+    default_chair: str = "project_alpha",
+    active_agents: set[str] | None = None,
+) -> str | None:
     """
     Choose who should reply, or None if the room should stay quiet.
 
-    - Named agent always wins.
-    - Room-wide questions go to the chair (Fred by default).
+    - Named agent always wins (if they are in the room).
+    - Room-wide questions go to the chair.
     - Other questions with no addressee also go to the chair.
     - Statements without an addressee do not trigger a reply.
     """
+    active = active_agents or set(NAME_ALIASES.keys())
     text = transcript.strip()
     if not is_response_worthy(text):
         return None
 
     addressee = named_addressee(text)
     if addressee:
+        if addressee not in active:
+            return None
         return addressee
 
     if looks_like_question(text) or is_room_wide(text):
-        return default_chair
+        if default_chair in active:
+            return default_chair
+        return next(iter(active), None)
 
     return None

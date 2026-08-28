@@ -56,7 +56,15 @@ class Settings(BaseSettings):
     interactive_debounce_sec: float = Field(default=1.2, alias="INTERACTIVE_DEBOUNCE_SEC")
     interactive_cooldown_sec: float = Field(default=1.5, alias="INTERACTIVE_COOLDOWN_SEC")
     interactive_max_reply_tokens: int = Field(default=80, alias="INTERACTIVE_MAX_REPLY_TOKENS")
-    interactive_default_chair: str = Field(default="fred", alias="INTERACTIVE_DEFAULT_CHAIR")
+    interactive_default_chair: str = Field(default="project_alpha", alias="INTERACTIVE_DEFAULT_CHAIR")
+    interactive_excluded_agents: str = Field(default="fred", alias="INTERACTIVE_EXCLUDED_AGENTS")
+
+    room_control_host: str = Field(default="127.0.0.1", alias="ROOM_CONTROL_HOST")
+    room_control_port: int = Field(default=8092, alias="ROOM_CONTROL_PORT")
+    room_control_token: str = Field(default="", alias="ROOM_CONTROL_TOKEN")
+
+    def interactive_excluded_keys(self) -> set[str]:
+        return {key.strip().lower() for key in self.interactive_excluded_agents.split(",") if key.strip()}
 
 
 @lru_cache

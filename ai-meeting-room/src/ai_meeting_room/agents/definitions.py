@@ -69,3 +69,8 @@ def agent_by_key(key: str) -> AgentDefinition | None:
         if agent.key == key:
             return agent
     return None
+
+
+def interactive_agents(*, excluded_keys: set[str]) -> tuple[AgentDefinition, ...]:
+    """Agents that join an interactive meeting (excludes kicked participants)."""
+    return tuple(agent for agent in ALL_AGENTS if agent.key not in excluded_keys)

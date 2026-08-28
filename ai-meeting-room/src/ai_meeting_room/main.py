@@ -7,6 +7,7 @@ import asyncio
 import logging
 import sys
 
+import httpx
 import uvicorn
 from dotenv import load_dotenv
 
@@ -73,12 +74,23 @@ async def _cmd_run() -> int:
 
 
 async def _cmd_interactive() -> int:
+    from ai_meeting_room.agents.definitions import interactive_agents
     from ai_meeting_room.demo.interactive_meeting import InteractiveMeeting
 
-    meeting = InteractiveMeeting(get_settings())
+    settings = get_settings()
+    active = interactive_agents(excluded_keys=settings.interactive_excluded_keys())
+    excluded = settings.interactive_excluded_keys()
+    meeting = InteractiveMeeting(settings)
+    names = ", ".join(a.display_name for a in active)
+    excluded_note = f" (not in call: {', '.join(sorted(excluded))})" if excluded else ""
     logging.getLogger(__name__).info(
         "Interactive mode: your mic → STT → OmniRoute → ElevenLabs TTS. "
-        "Say a name (Fred, Missy, Architect, Project Alpha) or talk to Fred by default."
+        "In the room: %s%s. Name someone or ask a room-wide question. "
+        "Host controls: http://%s:%s or `python -m ai_meeting_room.main room ...`",
+        names,
+        excluded_note,
+        settings.room_control_host,
+        settings.room_control_port,
     )
     try:
         await meeting.run_until_cancelled()
@@ -108,6 +120,47 @@ def _cmd_reasoning_api() -> int:
     return 0
 
 
+async def _cmd_room(args: argparse.Namespace) -> int:
+    from ai_meeting_room.room.client import RoomControlClient, format_status, print_result
+
+    settings = get_settings()
+    client = RoomControlClient(settings)
+
+    try:
+        if args.room_action == "status":
+            print(format_status(await client.status()))
+            return 0
+        if args.room_action == "kick":
+            print_result(await client.kick(args.agent))
+            return 0
+        if args.room_action == "invite":
+            print_result(await client.invite(args.agent))
+            return 0
+        if args.room_action == "chair":
+            print_result(await client.chair(args.agent))
+            return 0
+        if args.room_action == "pause":
+            print_result(await client.pause())
+            return 0
+        if args.room_action == "resume":
+            print_result(await client.resume())
+            return 0
+    except httpx.ConnectError:
+        print(
+            "Could not reach the room control API. "
+            "Start interactive mode first: python -m ai_meeting_room.main interactive",
+            file=sys.stderr,
+        )
+        return 1
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
+        print(f"Room control error ({exc.response.status_code}): {detail}", file=sys.stderr)
+        return 1
+
+    print(f"Unknown room action: {args.room_action}", file=sys.stderr)
+    return 1
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="AI Meeting Room POC")
@@ -119,6 +172,18 @@ def main() -> None:
     sub.add_parser("demo", help="Run speak demo: OmniRoute + TTS into LiveKit room")
     sub.add_parser("interactive", help="Listen to your mic and respond via OmniRoute + TTS")
     sub.add_parser("reasoning-api", help="Start Custom LLM server for ElevenLabs agents")
+
+    room = sub.add_parser("room", help="Host controls for a running interactive meeting")
+    room_sub = room.add_subparsers(dest="room_action", required=True)
+    room_sub.add_parser("status", help="Show who is in the call")
+    room_sub.add_parser("pause", help="Pause agent responses")
+    room_sub.add_parser("resume", help="Resume agent responses")
+    kick = room_sub.add_parser("kick", help="Remove an agent from the call")
+    kick.add_argument("agent", help="Agent key or name (fred, missy, architect, project_alpha)")
+    invite = room_sub.add_parser("invite", help="Bring an agent into the call")
+    invite.add_argument("agent", help="Agent key or name")
+    chair = room_sub.add_parser("chair", help="Set the meeting chair")
+    chair.add_argument("agent", help="Agent key or name")
 
     args = parser.parse_args()
     _configure_logging(args.verbose)
@@ -133,6 +198,8 @@ def main() -> None:
         sys.exit(asyncio.run(_cmd_interactive()))
     if args.command == "reasoning-api":
         sys.exit(_cmd_reasoning_api())
+    if args.command == "room":
+        sys.exit(asyncio.run(_cmd_room(args)))
 
 
 if __name__ == "__main__":
