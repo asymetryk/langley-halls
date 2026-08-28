@@ -60,6 +60,7 @@ async def setup_agents(settings: Settings, *, custom_llm_url: str | None = None)
                         "custom_llm": custom_llm,
                     },
                 },
+                "asr": {"user_input_audio_format": "pcm_16000"},
                 "tts": {"voice_id": agent.voice_id} if agent.voice_id else {},
                 "turn": {"mode": "turn"},
                 "conversation": {"max_duration_seconds": 3600},

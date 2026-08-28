@@ -80,7 +80,7 @@ class MeetingOrchestrator:
                 identity=agent.identity,
                 name=agent.display_name,
             )
-            bridge = ElevenLabsVoiceBridge(el_client, agent_id)
+            bridge = ElevenLabsVoiceBridge(el_client, agent_id, agent_name=agent.display_name)
             participant = LiveKitParticipant(
                 identity=agent.identity,
                 display_name=agent.display_name,

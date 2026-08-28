@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 
 from livekit import api, rtc
 
@@ -20,19 +19,11 @@ def is_human_participant(identity: str) -> bool:
     return not identity.startswith(AI_IDENTITY_PREFIX)
 
 
-@dataclass
-class RoomTrackHandle:
-    track: rtc.Track
-    participant_identity: str
-    stream_iterator: object | None = None
-
-
 class LiveKitParticipant:
     """
     One AI agent as an independent LiveKit room participant.
 
-    Subscribes to all remote audio (excluding self), mixes it, and forwards
-    to the ElevenLabs voice bridge.
+    Subscribes to human remote audio and forwards directly to ElevenLabs ConvAI.
     """
 
     def __init__(
@@ -50,13 +41,21 @@ class LiveKitParticipant:
         self._token = token
         self._voice_bridge = voice_bridge
         self._room = rtc.Room()
-        self._mixer: rtc.AudioMixer | None = None
-        self._tracks: dict[str, RoomTrackHandle] = {}
         self._connected = asyncio.Event()
+        self._human_tracks: set[str] = set()
 
     @property
     def room(self) -> rtc.Room:
         return self._room
+
+    def _on_human_audio_track(self, track: rtc.Track, participant_identity: str) -> None:
+        if track.sid in self._human_tracks:
+            return
+        self._human_tracks.add(track.sid)
+        asyncio.create_task(
+            self._voice_bridge.pump_human_track(track, participant_identity=participant_identity)
+        )
+        logger.info("%s now listening to %s", self.display_name, participant_identity)
 
     async def connect(self) -> None:
         @self._room.on("track_subscribed")
@@ -76,7 +75,7 @@ class LiveKitParticipant:
                     participant.identity,
                 )
                 return
-            asyncio.create_task(self._add_track(track, participant.identity))
+            self._on_human_audio_track(track, participant.identity)
 
         @self._room.on("participant_connected")
         def on_participant_connected(participant: rtc.RemoteParticipant) -> None:
@@ -84,55 +83,20 @@ class LiveKitParticipant:
                 return
             for pub in participant.track_publications.values():
                 if pub.track and pub.kind == rtc.TrackKind.KIND_AUDIO:
-                    asyncio.create_task(self._add_track(pub.track, participant.identity))
-
-        @self._room.on("track_unsubscribed")
-        def on_track_unsubscribed(
-            track: rtc.Track,
-            publication: rtc.RemoteTrackPublication,
-            participant: rtc.RemoteParticipant,
-        ) -> None:
-            asyncio.create_task(self._remove_track(track.sid))
+                    self._on_human_audio_track(pub.track, participant.identity)
 
         await self._room.connect(self._livekit_url, self._token)
-        self._mixer = rtc.AudioMixer(sample_rate=16000, num_channels=1)
         await self._voice_bridge.start(self._room, identity=self.identity)
-        await self._voice_bridge.pump_mixed_audio(self._mixer)
 
-        # Attach any human participants already in the room (e.g. host joined first).
         for participant in self._room.remote_participants.values():
             if not is_human_participant(participant.identity):
                 continue
             for pub in participant.track_publications.values():
                 if pub.track and pub.kind == rtc.TrackKind.KIND_AUDIO:
-                    await self._add_track(pub.track, participant.identity)
+                    self._on_human_audio_track(pub.track, participant.identity)
 
         self._connected.set()
         logger.info("%s joined room as %s", self.display_name, self.identity)
-
-    async def _add_track(self, track: rtc.Track, participant_identity: str) -> None:
-        if track.sid in self._tracks or self._mixer is None:
-            return
-
-        stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
-
-        async def frame_iter():
-            async for event in stream:
-                yield event.frame
-
-        iterator = frame_iter()
-        self._mixer.add_stream(iterator)
-        self._tracks[track.sid] = RoomTrackHandle(
-            track=track,
-            participant_identity=participant_identity,
-            stream_iterator=iterator,
-        )
-        logger.info("%s now listening to %s", self.display_name, participant_identity)
-
-    async def _remove_track(self, track_sid: str) -> None:
-        handle = self._tracks.pop(track_sid, None)
-        if handle and self._mixer and handle.stream_iterator:
-            self._mixer.remove_stream(handle.stream_iterator)
 
     async def disconnect(self) -> None:
         await self._voice_bridge.close()
