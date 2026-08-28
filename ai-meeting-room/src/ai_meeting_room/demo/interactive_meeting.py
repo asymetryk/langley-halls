@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 
 from livekit import rtc
 from livekit.agents import inference
@@ -16,28 +17,13 @@ from ai_meeting_room.adapters.room.livekit_participant import (
     mint_participant_token,
 )
 from ai_meeting_room.agents.definitions import ALL_AGENTS, AgentDefinition
+from ai_meeting_room.agents.tuning import pick_responder
 from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
 from elevenlabs import AsyncElevenLabs
 
 logger = logging.getLogger(__name__)
-
-_NAME_ALIASES: dict[str, list[str]] = {
-    "fred": ["fred"],
-    "missy": ["missy"],
-    "architect": ["architect"],
-    "project_alpha": ["project alpha", "alpha"],
-}
-
-
-def pick_responder(transcript: str) -> str:
-    """Choose one agent to reply (chair = Fred by default)."""
-    text = transcript.lower()
-    for key, aliases in _NAME_ALIASES.items():
-        if any(alias in text for alias in aliases):
-            return key
-    return "fred"
 
 
 class InteractiveMeeting:
@@ -46,8 +32,11 @@ class InteractiveMeeting:
         self._el = AsyncElevenLabs(api_key=settings.elevenlabs_api_key)
         self._rooms: dict[str, tuple[rtc.Room, rtc.AudioSource, AgentDefinition]] = {}
         self._memories = {a.key: AgentMemory(a.display_name) for a in ALL_AGENTS}
-        self._responding = asyncio.Lock()
         self._listen_room: rtc.Room | None = None
+        self._responding = False
+        self._cooldown_until = 0.0
+        self._debounce_buffer: list[str] = []
+        self._debounce_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         for agent in ALL_AGENTS:
@@ -93,7 +82,11 @@ class InteractiveMeeting:
                 return
             human_track = track
             ready.set()
-            logger.info("Listening to human: %s (%s)", participant.name or participant.identity, participant.identity)
+            logger.info(
+                "Listening to human: %s (%s)",
+                participant.name or participant.identity,
+                participant.identity,
+            )
 
         @room.on("track_subscribed")
         def on_track(track: rtc.Track, _pub, participant: rtc.RemoteParticipant) -> None:
@@ -152,42 +145,80 @@ class InteractiveMeeting:
                     if not text or len(text) < 2:
                         continue
                     logger.info("Human said: %s", text)
-                    asyncio.create_task(self._handle_utterance(text))
+                    self._queue_utterance(text)
             finally:
                 pump_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await pump_task
 
+    def _queue_utterance(self, text: str) -> None:
+        """Debounce rapid STT finals into one utterance."""
+        self._debounce_buffer.append(text)
+        if self._debounce_task and not self._debounce_task.done():
+            self._debounce_task.cancel()
+        self._debounce_task = asyncio.create_task(self._flush_debounce())
+
+    async def _flush_debounce(self) -> None:
+        try:
+            await asyncio.sleep(self._settings.interactive_debounce_sec)
+        except asyncio.CancelledError:
+            return
+        if not self._debounce_buffer:
+            return
+        merged = " ".join(self._debounce_buffer).strip()
+        self._debounce_buffer.clear()
+        await self._handle_utterance(merged)
+
     async def _announce_ready(self) -> None:
-        """Fred tells the human the room is listening."""
+        """Short room cue — agents stay quiet until addressed."""
         _room, source, agent = self._rooms["fred"]
         text = (
-            "I'm listening now. Go ahead and speak — I'll respond. "
-            "Or say Missy, Architect, or Project Alpha to reach someone else."
+            "Room is live. Say a name to reach someone — Fred, Missy, Architect, or Project Alpha."
         )
         pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=text)
         await _play_pcm(source, pcm)
+        self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
 
     async def _handle_utterance(self, text: str) -> None:
-        async with self._responding:
-            key = pick_responder(text)
-            room, source, agent = self._rooms[key]
+        if time.monotonic() < self._cooldown_until:
+            logger.debug("Cooldown active, ignoring: %s", text)
+            return
+        if self._responding:
+            logger.debug("Already responding, ignoring: %s", text)
+            return
+
+        key = pick_responder(text, default_chair=self._settings.interactive_default_chair)
+        if key is None:
+            logger.info("No response warranted for: %s", text)
+            return
+
+        self._responding = True
+        try:
+            _room, source, agent = self._rooms[key]
             memory = self._memories[key]
             memory.remember("You", text)
 
             history = "\n".join(f"- {s}: {t}" for s, t in memory.as_messages()[-6:])
-            user = f"The human in the room said: {text}\n\nRecent context:\n{history}\n\nReply in 1-3 short spoken sentences."
+            user = (
+                f'The human said: "{text}"\n\n'
+                f"Recent context:\n{history}\n\n"
+                "Give a brief spoken reply. Do not take over the conversation."
+            )
 
             reply = await _omniroute_line(
                 self._settings,
                 system=agent.system_prompt,
                 user=user,
+                max_tokens=self._settings.interactive_max_reply_tokens,
             )
             memory.remember(agent.display_name, reply)
             logger.info("%s replies: %s", agent.display_name, reply)
 
             pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=reply)
             await _play_pcm(source, pcm)
+        finally:
+            self._responding = False
+            self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
 
     async def run_until_cancelled(self) -> None:
         async with http_context.open():

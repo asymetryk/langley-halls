@@ -19,7 +19,13 @@ logger = logging.getLogger(__name__)
 OUTPUT_RATE = 24000
 
 
-async def _omniroute_line(settings: Settings, *, system: str, user: str) -> str:
+async def _omniroute_line(
+    settings: Settings,
+    *,
+    system: str,
+    user: str,
+    max_tokens: int = 120,
+) -> str:
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{settings.omniroute_base_url.rstrip('/')}/v1/chat/completions",
@@ -34,7 +40,7 @@ async def _omniroute_line(settings: Settings, *, system: str, user: str) -> str:
                     {"role": "user", "content": user},
                 ],
                 "stream": False,
-                "max_tokens": 120,
+                "max_tokens": max_tokens,
             },
         )
         response.raise_for_status()

@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     user_input_rate: int = 16000
     agent_output_rate: int = 24000
 
+    # Interactive meeting tuning
+    interactive_debounce_sec: float = Field(default=1.2, alias="INTERACTIVE_DEBOUNCE_SEC")
+    interactive_cooldown_sec: float = Field(default=1.5, alias="INTERACTIVE_COOLDOWN_SEC")
+    interactive_max_reply_tokens: int = Field(default=80, alias="INTERACTIVE_MAX_REPLY_TOKENS")
+    interactive_default_chair: str = Field(default="fred", alias="INTERACTIVE_DEFAULT_CHAIR")
+
 
 @lru_cache
 def get_settings() -> Settings:
