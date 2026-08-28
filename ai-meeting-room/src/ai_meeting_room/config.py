@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     reasoning_api_port: int = Field(default=8090, alias="REASONING_API_PORT")
     reasoning_api_public_url: str = Field(default="", alias="REASONING_API_PUBLIC_URL")
 
+    omniroute_base_url: str = Field(
+        default="https://omniroute-api.asymetryk.com", alias="OMNIROUTE_BASE_URL"
+    )
+    omniroute_api_key: str = Field(default="", alias="OMNIROUTE_API_KEY")
+    omniroute_model: str = Field(default="codex/gpt-5.6-sol", alias="OMNIROUTE_MODEL")
+
     baserow_api_url: str = Field(default="https://api.baserow.io", alias="BASEROW_API_URL")
     baserow_api_token: str = Field(default="", alias="BASEROW_API_TOKEN")
     baserow_secrets_table_id: int | None = Field(default=None, alias="BASEROW_SECRETS_TABLE_ID")
