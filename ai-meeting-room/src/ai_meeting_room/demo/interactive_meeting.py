@@ -85,8 +85,7 @@ class InteractiveMeeting:
         human_track: rtc.Track | None = None
         ready = asyncio.Event()
 
-        @room.on("track_subscribed")
-        def on_track(track: rtc.Track, _pub, participant: rtc.RemoteParticipant) -> None:
+        def attach_human(track: rtc.Track, participant: rtc.RemoteParticipant) -> None:
             nonlocal human_track
             if track.kind != rtc.TrackKind.KIND_AUDIO:
                 return
@@ -94,7 +93,23 @@ class InteractiveMeeting:
                 return
             human_track = track
             ready.set()
-            logger.info("Listening to human: %s", participant.identity)
+            logger.info("Listening to human: %s (%s)", participant.name or participant.identity, participant.identity)
+
+        @room.on("track_subscribed")
+        def on_track(track: rtc.Track, _pub, participant: rtc.RemoteParticipant) -> None:
+            attach_human(track, participant)
+
+        @room.on("participant_connected")
+        def on_participant(participant: rtc.RemoteParticipant) -> None:
+            if not is_human_participant(participant.identity):
+                return
+            for pub in participant.track_publications.values():
+                if pub.kind != rtc.TrackKind.KIND_AUDIO:
+                    continue
+                if pub.track:
+                    attach_human(pub.track, participant)
+                else:
+                    pub.set_subscribed(True)
 
         for participant in room.remote_participants.values():
             if not is_human_participant(participant.identity):
@@ -114,6 +129,8 @@ class InteractiveMeeting:
             logger.error("No human participant joined within 120s")
             return
         assert human_track is not None
+        logger.info("Human mic connected — starting speech recognition")
+        asyncio.create_task(self._announce_ready())
 
         stt_stream = stt.stream()
 
@@ -140,6 +157,16 @@ class InteractiveMeeting:
                 pump_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await pump_task
+
+    async def _announce_ready(self) -> None:
+        """Fred tells the human the room is listening."""
+        _room, source, agent = self._rooms["fred"]
+        text = (
+            "I'm listening now. Go ahead and speak — I'll respond. "
+            "Or say Missy, Architect, or Project Alpha to reach someone else."
+        )
+        pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=text)
+        await _play_pcm(source, pcm)
 
     async def _handle_utterance(self, text: str) -> None:
         async with self._responding:

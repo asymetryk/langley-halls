@@ -84,6 +84,9 @@ async def _cmd_interactive() -> int:
         await meeting.run_until_cancelled()
     except KeyboardInterrupt:
         await meeting.stop()
+    return 0
+
+
 async def _cmd_demo() -> int:
     from ai_meeting_room.demo.speak_demo import run_speak_demo
 
