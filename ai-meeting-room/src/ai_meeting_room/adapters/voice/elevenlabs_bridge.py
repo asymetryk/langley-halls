@@ -99,7 +99,19 @@ class ElevenLabsVoiceBridge:
                     self._audio_source.clear_queue()
                     logger.debug("Interruption — cleared audio queue")
                 elif etype == "user_transcript":
-                    transcript = event.get("user_transcription_event", {}).get("user_transcript", "")
+                    event = event.get("user_transcription_event", event)
+                    transcript = event.get("user_transcript", "")
+                    if isinstance(transcript, list):
+                        # New API: list of TranscriptMessage dicts — take latest user turn.
+                        for item in reversed(transcript):
+                            if isinstance(item, dict) and item.get("role") == "user":
+                                transcript = item.get("message", "") or item.get("content", "")
+                                break
+                            if getattr(item, "role", None) == "user":
+                                transcript = getattr(item, "message", "") or getattr(item, "content", "")
+                                break
+                        else:
+                            transcript = ""
                     if transcript:
                         logger.info("Heard: %s", transcript)
                 elif etype == "agent_response":

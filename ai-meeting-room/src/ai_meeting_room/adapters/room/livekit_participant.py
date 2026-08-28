@@ -12,6 +12,13 @@ from ai_meeting_room.adapters.voice.elevenlabs_bridge import ElevenLabsVoiceBrid
 
 logger = logging.getLogger(__name__)
 
+AI_IDENTITY_PREFIX = "ai-"
+
+
+def is_human_participant(identity: str) -> bool:
+    """Only forward human microphone audio to ElevenLabs (not other AI agents)."""
+    return not identity.startswith(AI_IDENTITY_PREFIX)
+
 
 @dataclass
 class RoomTrackHandle:
@@ -62,7 +69,22 @@ class LiveKitParticipant:
                 return
             if participant.identity == self.identity:
                 return
+            if not is_human_participant(participant.identity):
+                logger.debug(
+                    "%s ignoring audio from AI peer %s",
+                    self.display_name,
+                    participant.identity,
+                )
+                return
             asyncio.create_task(self._add_track(track, participant.identity))
+
+        @self._room.on("participant_connected")
+        def on_participant_connected(participant: rtc.RemoteParticipant) -> None:
+            if not is_human_participant(participant.identity):
+                return
+            for pub in participant.track_publications.values():
+                if pub.track and pub.kind == rtc.TrackKind.KIND_AUDIO:
+                    asyncio.create_task(self._add_track(pub.track, participant.identity))
 
         @self._room.on("track_unsubscribed")
         def on_track_unsubscribed(
@@ -76,6 +98,15 @@ class LiveKitParticipant:
         self._mixer = rtc.AudioMixer(sample_rate=16000, num_channels=1)
         await self._voice_bridge.start(self._room, identity=self.identity)
         await self._voice_bridge.pump_mixed_audio(self._mixer)
+
+        # Attach any human participants already in the room (e.g. host joined first).
+        for participant in self._room.remote_participants.values():
+            if not is_human_participant(participant.identity):
+                continue
+            for pub in participant.track_publications.values():
+                if pub.track and pub.kind == rtc.TrackKind.KIND_AUDIO:
+                    await self._add_track(pub.track, participant.identity)
+
         self._connected.set()
         logger.info("%s joined room as %s", self.display_name, self.identity)
 
