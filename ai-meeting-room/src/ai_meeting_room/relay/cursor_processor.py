@@ -58,8 +58,8 @@ async def process_cursor_inbox(
     if speak:
         await meeting.deliver_thread_message(reply, speak=True)
 
-    count = inbox.mark_delivered()
-    logger.info("Processed %s cursor inbox message(s): %s", count, reply[:80])
+    count = inbox.mark_agent_executed()
+    logger.info("Stub-replied to %s cursor inbox message(s): %s", count, reply[:80])
     return count
 
 

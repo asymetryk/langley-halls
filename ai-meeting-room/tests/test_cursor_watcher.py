@@ -37,3 +37,5 @@ def test_watch_messages_log(tmp_path: Path) -> None:
     pending = inbox.pending()
     assert len(pending) == 1
     assert pending[0]["text"] == "Cursor, ping"
+    assert inbox.mark_agent_executed([pending[0]["id"]]) == 1
+    assert inbox.pending_for_agent() == []

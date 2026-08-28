@@ -45,6 +45,8 @@ def mint_join_link(*, room: str, identity: str, name: str, livekit_url: str | No
     settings = get_settings()
     server_url = livekit_url or settings.livekit_url
     token = mint_human_token(room=room, identity=identity, name=name)
+    base = settings.room_control_public_url or f"http://{settings.room_control_host}:{settings.room_control_port}"
+    meet_url = f"{base.rstrip('/')}/meet?identity={quote(identity, safe='')}&name={quote(name, safe='')}"
     return {
         "identity": identity,
         "name": name,
@@ -52,6 +54,7 @@ def mint_join_link(*, room: str, identity: str, name: str, livekit_url: str | No
         "livekit_url": server_url,
         "token": token,
         "join_url": build_meet_join_url(livekit_url=server_url, token=token),
+        "meet_url": meet_url,
     }
 
 

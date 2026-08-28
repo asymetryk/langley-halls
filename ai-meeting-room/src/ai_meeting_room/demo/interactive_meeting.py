@@ -120,7 +120,11 @@ class InteractiveMeeting:
             logger.info("Backfilled %s message(s) into Cursor inbox", backfilled)
         self._relay_task = asyncio.create_task(self._relay_inbox_loop())
         self._cursor_watch_task = asyncio.create_task(self._cursor_watch_loop())
-        self._cursor_process_task = asyncio.create_task(self._cursor_process_loop())
+        if self._settings.cursor_auto_reply_in_room:
+            self._cursor_process_task = asyncio.create_task(self._cursor_process_loop())
+            logger.info("Cursor auto-reply in room enabled (OmniRoute stub — not real agent)")
+        else:
+            logger.info("Cursor inbox queues for real Cloud Agent thread (no auto-reply)")
         logger.info("Relay bridge active at %s", store.directory)
 
     async def _speak_as_relay(self, text: str) -> None:
@@ -155,6 +159,12 @@ class InteractiveMeeting:
                 queued = self._cursor_inbox.watch_messages_log(log_path, mode=mode)
                 if queued:
                     logger.info("Queued %s message(s) for Cursor inbox", queued)
+                    pending = self._cursor_inbox.pending_for_agent()
+                    newest = pending[-1]["id"] if pending else None
+                    self._cursor_inbox.write_agent_wake(
+                        pending_count=len(pending),
+                        newest_id=newest,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:

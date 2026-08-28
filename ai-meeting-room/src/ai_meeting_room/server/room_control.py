@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -26,6 +27,12 @@ class CursorAckRequest(BaseModel):
     msg_ids: list[str] = Field(default_factory=list)
 
 
+class CursorAgentCompleteRequest(BaseModel):
+    msg_ids: list[str] = Field(default_factory=list)
+    summary: str = Field(default="", max_length=2000)
+    speak: bool = True
+
+
 def create_room_control_app(controller: RoomController) -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="AI Meeting Room Control", version="0.2.0")
@@ -44,6 +51,18 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @app.get("/meet")
+    async def meet_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "meet.html")
+
+    @app.get("/join-token")
+    async def join_token(identity: str = "host", name: str | None = None) -> dict[str, Any]:
+        display = name or ("You" if identity == "host" else identity.replace("-", " ").title())
+        link = mint_join_link(room=settings.meeting_room_name, identity=identity, name=display)
+        base = settings.room_control_public_url or f"http://{settings.room_control_host}:{settings.room_control_port}"
+        link["meet_url"] = f"{base.rstrip('/')}/meet?identity={identity}&name={quote(display, safe='')}"
+        return link
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -59,8 +78,8 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
             "room": room,
             "livekit_url": settings.livekit_url,
             "instructions": (
-                "Open the join_url in a browser. Do not use the meet.livekit.io homepage "
-                "— it connects to LiveKit's demo cloud, not this project."
+                "Open meet_url in a browser for human camera + audio. "
+                "meet.livekit.io/custom works but often skips camera setup and can block remote audio."
             ),
             "links": links,
         }
@@ -130,6 +149,21 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
     @app.get("/relay/cursor/pending", dependencies=[Depends(_auth)])
     async def cursor_pending() -> dict[str, Any]:
         return controller.cursor_pending()
+
+    @app.get("/relay/cursor/agent-pending", dependencies=[Depends(_auth)])
+    async def cursor_agent_pending() -> dict[str, Any]:
+        return controller.cursor_agent_pending()
+
+    @app.post("/relay/cursor/agent-complete", dependencies=[Depends(_auth)])
+    async def cursor_agent_complete(body: CursorAgentCompleteRequest) -> dict[str, Any]:
+        try:
+            return await controller.cursor_agent_complete(
+                body.msg_ids,
+                summary=body.summary,
+                speak=body.speak,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/relay/cursor/ack", dependencies=[Depends(_auth)])
     async def cursor_ack(body: CursorAckRequest | None = None) -> dict[str, Any]:

@@ -176,6 +176,11 @@
       font-weight: 600;
     }
     a.join-link:hover { text-decoration: underline; }
+    .join-note {
+      font-size: 0.78rem;
+      color: var(--warn);
+      margin-top: 0.35rem;
+    }
   </style>
 </head>
 <body>
@@ -279,7 +284,8 @@
     function renderJoinLinks(data) {
       const root = document.getElementById('join-links');
       const help = document.getElementById('join-help');
-      help.textContent = data.instructions || 'Use these links to join with mic access.';
+      help.textContent = (data.instructions || 'Use these links to join with mic access.')
+        + ' Prefer the hosted meet page for human-to-human camera and audio.';
       root.innerHTML = (data.links || []).map(link => `
         <article class="join-card">
           <div class="agent-top">
@@ -287,10 +293,11 @@
             <div class="badges">${badge(link.identity, '')}</div>
           </div>
           <div>
-            <a class="join-link" href="${escapeHtml(link.join_url)}" target="_blank" rel="noopener">Open in LiveKit Meet →</a>
+            <a class="join-link" href="${escapeHtml(link.meet_url || link.join_url)}" target="_blank" rel="noopener">Open meet page (recommended) →</a>
           </div>
-          <div class="join-url">${escapeHtml(link.join_url)}</div>
-          <button type="button" data-copy="${escapeHtml(link.join_url)}">Copy link</button>
+          <div class="join-note">Use this for camera + two-way human audio. meet.livekit.io often skips camera setup.</div>
+          <div class="join-url">${escapeHtml(link.meet_url || link.join_url)}</div>
+          <button type="button" data-copy="${escapeHtml(link.meet_url || link.join_url)}">Copy meet link</button>
         </article>
       `).join('');
     }

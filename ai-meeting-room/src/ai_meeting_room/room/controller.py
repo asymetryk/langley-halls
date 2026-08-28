@@ -191,14 +191,53 @@ class RoomController:
         meeting = self._meeting
         if not meeting._cursor_inbox:
             return {"pending": [], "count": 0}
-        pending = meeting._cursor_inbox.pending()
+        pending = meeting._cursor_inbox.pending_for_agent()
         return {"pending": pending, "count": len(pending)}
+
+    def cursor_agent_pending(self) -> dict[str, Any]:
+        meeting = self._meeting
+        if not meeting._cursor_inbox:
+            return {"pending": [], "count": 0, "instructions": None}
+        pending = meeting._cursor_inbox.pending_for_agent()
+        if not pending:
+            return {"pending": [], "count": 0, "instructions": None}
+        lines = [f"[{m.get('speaker', 'You')}] {m.get('text', '')}" for m in pending]
+        return {
+            "pending": pending,
+            "count": len(pending),
+            "instructions": (
+                "Execute these meeting-room instructions in this Cloud Agent thread, "
+                "then POST /relay/cursor/agent-complete with msg_ids and a short spoken summary."
+            ),
+            "prompt": "From the AI meeting room:\n" + "\n".join(lines),
+        }
+
+    async def cursor_agent_complete(
+        self,
+        msg_ids: list[str],
+        *,
+        summary: str,
+        speak: bool,
+    ) -> dict[str, Any]:
+        meeting = self._meeting
+        if not meeting._cursor_inbox:
+            raise ValueError("Cursor inbox not enabled")
+        if not msg_ids:
+            raise ValueError("msg_ids required")
+        count = meeting._cursor_inbox.mark_agent_executed(msg_ids)
+        if summary.strip() and meeting._relay:
+            await meeting.deliver_thread_message(summary.strip(), speak=speak)
+        return {
+            "ok": True,
+            "executed": count,
+            "message": f"Marked {count} message(s) executed",
+        }
 
     def cursor_ack(self, msg_ids: list[str] | None = None) -> dict[str, Any]:
         meeting = self._meeting
         if not meeting._cursor_inbox:
             return {"ok": True, "acknowledged": 0}
-        count = meeting._cursor_inbox.mark_delivered(msg_ids)
+        count = meeting._cursor_inbox.mark_agent_executed(msg_ids)
         return {"ok": True, "acknowledged": count}
 
     async def cursor_process(self, *, speak: bool = True) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,6 +25,7 @@ class CursorInboxMessage:
     text: str
     source_kind: str
     delivered: bool = False
+    agent_executed: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -92,7 +94,25 @@ class CursorInbox:
         self._seen_ids.add(msg_id)
         return True
 
+    def write_agent_wake(self, *, pending_count: int, newest_id: str | None = None) -> None:
+        """Signal that the Cloud Agent should poll agent-pending."""
+        wake = {
+            "pending_count": pending_count,
+            "newest_id": newest_id,
+            "ts": datetime.now(UTC).isoformat(),
+            "poll_url": "http://127.0.0.1:8092/relay/cursor/agent-pending",
+            "complete_url": "http://127.0.0.1:8092/relay/cursor/agent-complete",
+        }
+        (self._dir / "cursor_agent_wake.json").write_text(
+            json.dumps(wake, indent=2),
+            encoding="utf-8",
+        )
+
     def pending(self) -> list[dict[str, Any]]:
+        """Legacy alias — messages still waiting for the real Cursor agent."""
+        return self.pending_for_agent()
+
+    def pending_for_agent(self) -> list[dict[str, Any]]:
         if not self._inbox.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -100,9 +120,27 @@ class CursorInbox:
             if not line.strip():
                 continue
             payload = json.loads(line)
-            if not payload.get("delivered"):
+            if not payload.get("agent_executed"):
                 items.append(payload)
         return items
+
+    def mark_agent_executed(self, msg_ids: list[str] | None = None) -> int:
+        if not self._inbox.exists():
+            return 0
+        lines = self._inbox.read_text(encoding="utf-8").splitlines()
+        updated: list[str] = []
+        count = 0
+        for line in lines:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if not payload.get("agent_executed") and (msg_ids is None or payload["id"] in msg_ids):
+                payload["agent_executed"] = True
+                payload["delivered"] = True
+                count += 1
+            updated.append(json.dumps(payload, ensure_ascii=False))
+        self._inbox.write_text("\n".join(updated) + ("\n" if updated else ""), encoding="utf-8")
+        return count
 
     def mark_delivered(self, msg_ids: list[str] | None = None) -> int:
         if not self._inbox.exists():

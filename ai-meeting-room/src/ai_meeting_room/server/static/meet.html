@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Meeting Room — Join</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #171a22;
+      --border: #2a3040;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --accent: #5b8cff;
+      --good: #3ecf8e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem;
+      display: grid;
+      gap: 1rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+    }
+    h1 { margin: 0 0 0.5rem; font-size: 1.35rem; }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    .preview {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #000;
+      border-radius: 10px;
+      object-fit: cover;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.75rem;
+    }
+    .remote-tile {
+      background: #11141b;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .remote-tile video {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #000;
+      object-fit: cover;
+      display: block;
+    }
+    .remote-label {
+      padding: 0.45rem 0.65rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #1f2430;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.55rem 0.9rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      margin-right: 0.5rem;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.on { border-color: var(--good); color: var(--good); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .status { color: var(--muted); font-size: 0.85rem; }
+    .error { color: #ff8a8a; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel" id="prejoin">
+      <h1>Join AI Meeting Room</h1>
+      <div class="meta" id="who">Loading…</div>
+      <video id="preview" class="preview" autoplay playsinline muted></video>
+      <div class="toolbar" style="margin-top:0.75rem">
+        <button id="btn-mic" class="on">Mic on</button>
+        <button id="btn-cam" class="on">Camera on</button>
+        <button class="primary" id="btn-join">Join room</button>
+      </div>
+      <p class="meta">Enable mic and camera before joining so other humans can see and hear you.</p>
+    </section>
+
+    <section class="panel" id="inroom" style="display:none">
+      <div class="toolbar">
+        <strong id="room-title">In room</strong>
+        <span class="status" id="conn-status">Connected</span>
+        <button id="btn-leave">Leave</button>
+      </div>
+      <div class="grid" id="remotes"></div>
+      <p class="meta">If you cannot hear someone, click anywhere on the page once (browser autoplay).</p>
+    </section>
+
+    <div class="status error" id="error"></div>
+  </main>
+
+  <script type="module">
+    import {
+      Room,
+      RoomEvent,
+      Track,
+      createLocalTracks,
+    } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.9.3/+esm';
+
+    const params = new URLSearchParams(location.search);
+    const identity = params.get('identity') || 'host';
+    const name = params.get('name') || 'Guest';
+
+    const previewEl = document.getElementById('preview');
+    const prejoinEl = document.getElementById('prejoin');
+    const inroomEl = document.getElementById('inroom');
+    const remotesEl = document.getElementById('remotes');
+    const errorEl = document.getElementById('error');
+    const whoEl = document.getElementById('who');
+
+    let joinConfig = null;
+    let localTracks = [];
+    let micEnabled = true;
+    let camEnabled = true;
+    let room = null;
+
+    whoEl.textContent = `Joining as ${name} (${identity})`;
+
+    async function loadConfig() {
+      const res = await fetch(`/join-token?identity=${encodeURIComponent(identity)}&name=${encodeURIComponent(name)}`);
+      if (!res.ok) throw new Error(await res.text());
+      joinConfig = await res.json();
+    }
+
+    async function setupPreview() {
+      localTracks = await createLocalTracks({ audio: true, video: true });
+      for (const track of localTracks) {
+        if (track.kind === Track.Kind.Video) {
+          track.attach(previewEl);
+        }
+      }
+      syncToggleButtons();
+    }
+
+    function syncToggleButtons() {
+      document.getElementById('btn-mic').textContent = micEnabled ? 'Mic on' : 'Mic off';
+      document.getElementById('btn-mic').classList.toggle('on', micEnabled);
+      document.getElementById('btn-cam').textContent = camEnabled ? 'Camera on' : 'Camera off';
+      document.getElementById('btn-cam').classList.toggle('on', camEnabled);
+      for (const track of localTracks) {
+        if (track.kind === Track.Kind.Audio) track.mediaStreamTrack.enabled = micEnabled;
+        if (track.kind === Track.Kind.Video) track.mediaStreamTrack.enabled = camEnabled;
+      }
+    }
+
+    function attachRemoteTrack(track, participant) {
+      const tile = document.createElement('div');
+      tile.className = 'remote-tile';
+      tile.dataset.sid = track.sid;
+      const label = document.createElement('div');
+      label.className = 'remote-label';
+      label.textContent = participant.name || participant.identity;
+      tile.appendChild(label);
+
+      if (track.kind === Track.Kind.Video) {
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.playsInline = true;
+        track.attach(video);
+        tile.insertBefore(video, label);
+      } else if (track.kind === Track.Kind.Audio) {
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        track.attach(audio);
+        tile.appendChild(audio);
+      }
+      remotesEl.appendChild(tile);
+    }
+
+    function removeRemoteTrack(track) {
+      const tile = remotesEl.querySelector(`[data-sid="${track.sid}"]`);
+      if (tile) tile.remove();
+    }
+
+    async function joinRoom() {
+      room = new Room({ adaptiveStream: true, dynacast: true });
+      room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+        attachRemoteTrack(track, participant);
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        removeRemoteTrack(track);
+      });
+      room.on(RoomEvent.Disconnected, () => {
+        document.getElementById('conn-status').textContent = 'Disconnected';
+      });
+
+      await room.connect(joinConfig.livekit_url, joinConfig.token);
+      for (const track of localTracks) {
+        await room.localParticipant.publishTrack(track);
+      }
+
+      prejoinEl.style.display = 'none';
+      inroomEl.style.display = 'block';
+      document.getElementById('room-title').textContent = joinConfig.room;
+
+      for (const participant of room.remoteParticipants.values()) {
+        for (const pub of participant.trackPublications.values()) {
+          if (pub.track) attachRemoteTrack(pub.track, participant);
+        }
+      }
+    }
+
+    async function leaveRoom() {
+      if (room) await room.disconnect();
+      for (const track of localTracks) track.stop();
+      location.reload();
+    }
+
+    document.getElementById('btn-mic').onclick = () => {
+      micEnabled = !micEnabled;
+      syncToggleButtons();
+    };
+    document.getElementById('btn-cam').onclick = () => {
+      camEnabled = !camEnabled;
+      syncToggleButtons();
+    };
+    document.getElementById('btn-join').onclick = async () => {
+      try {
+        await joinRoom();
+      } catch (err) {
+        errorEl.textContent = String(err.message || err);
+      }
+    };
+    document.getElementById('btn-leave').onclick = leaveRoom;
+    document.body.addEventListener('click', () => {
+      // Unblock remote audio autoplay after user gesture.
+      for (const audio of remotesEl.querySelectorAll('audio')) {
+        audio.play?.().catch(() => {});
+      }
+    }, { once: true });
+
+    try {
+      await loadConfig();
+      await setupPreview();
+    } catch (err) {
+      errorEl.textContent = String(err.message || err);
+    }
+  </script>
+</body>
+</html>
