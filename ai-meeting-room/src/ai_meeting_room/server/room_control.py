@@ -21,6 +21,10 @@ class RelaySayRequest(BaseModel):
     speak: bool = True
 
 
+class CursorAckRequest(BaseModel):
+    msg_ids: list[str] = Field(default_factory=list)
+
+
 def create_room_control_app(controller: RoomController) -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="AI Meeting Room Control", version="0.2.0")
@@ -104,5 +108,14 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
             return await controller.relay_say(body.text, speak=body.speak)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/relay/cursor/pending", dependencies=[Depends(_auth)])
+    async def cursor_pending() -> dict[str, Any]:
+        return controller.cursor_pending()
+
+    @app.post("/relay/cursor/ack", dependencies=[Depends(_auth)])
+    async def cursor_ack(body: CursorAckRequest | None = None) -> dict[str, Any]:
+        ids = body.msg_ids if body and body.msg_ids else None
+        return controller.cursor_ack(ids)
 
     return app

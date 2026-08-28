@@ -185,3 +185,17 @@ class RoomController:
             raise ValueError("Relay is not enabled")
         await meeting.deliver_thread_message(text, speak=speak)
         return {"ok": True, "message": "Sent to room via Relay"}
+
+    def cursor_pending(self) -> dict[str, Any]:
+        meeting = self._meeting
+        if not meeting._cursor_inbox:
+            return {"pending": [], "count": 0}
+        pending = meeting._cursor_inbox.pending()
+        return {"pending": pending, "count": len(pending)}
+
+    def cursor_ack(self, msg_ids: list[str] | None = None) -> dict[str, Any]:
+        meeting = self._meeting
+        if not meeting._cursor_inbox:
+            return {"ok": True, "acknowledged": 0}
+        count = meeting._cursor_inbox.mark_delivered(msg_ids)
+        return {"ok": True, "acknowledged": count}

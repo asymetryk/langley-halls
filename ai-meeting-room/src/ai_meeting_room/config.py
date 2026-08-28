@@ -65,6 +65,8 @@ class Settings(BaseSettings):
 
     relay_enabled: bool = Field(default=True, alias="RELAY_ENABLED")
     relay_dir: str = Field(default="relay", alias="RELAY_DIR")
+    relay_forward_mode: str = Field(default="relay", alias="RELAY_FORWARD_MODE")
+    relay_cursor_poll_sec: float = Field(default=1.0, alias="RELAY_CURSOR_POLL_SEC")
 
     def interactive_excluded_keys(self) -> set[str]:
         return {key.strip().lower() for key in self.interactive_excluded_agents.split(",") if key.strip()}

@@ -179,7 +179,13 @@
     </section>
 
     <section class="panel">
-      <h2>Relay ↔ Cursor thread</h2>
+      <h2>Cursor inbox <span id="cursor-count" class="badge"></span></h2>
+      <div id="cursor-inbox" class="relay-log" style="height:140px;margin-bottom:0.75rem"></div>
+      <p class="meta">Say “Relay, …” or “Cursor, …” in the room. Pending messages wake the Cursor agent automatically.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Relay ↔ room</h2>
       <div id="relay-log" class="relay-log"></div>
       <div class="relay-compose">
         <textarea id="relay-input" placeholder="Type a message for Relay to speak in the room…"></textarea>
@@ -279,6 +285,24 @@
       }).join('');
     }
 
+    function renderCursorInbox(pending) {
+      const root = document.getElementById('cursor-inbox');
+      const count = document.getElementById('cursor-count');
+      count.textContent = pending.length ? `${pending.length} pending` : 'idle';
+      if (!pending.length) {
+        root.innerHTML = '<div class="meta">No messages waiting for Cursor.</div>';
+        return;
+      }
+      root.innerHTML = pending.map(m => `
+        <div class="relay-line">
+          <span class="who">${escapeHtml(m.speaker)}</span>
+          <span class="ts">${m.ts}</span>
+          <div>${escapeHtml(m.text)}</div>
+        </div>
+      `).join('');
+      root.scrollTop = root.scrollHeight;
+    }
+
     function renderRelay(messages) {
       const root = document.getElementById('relay-log');
       if (!messages.length) {
@@ -319,9 +343,10 @@
 
     async function refresh() {
       if (busy) return;
-      const [status, relay] = await Promise.all([
+      const [status, relay, cursor] = await Promise.all([
         api('/status'),
         api('/relay/messages?limit=80'),
+        api('/relay/cursor/pending'),
       ]);
       state = status;
       document.getElementById('room-meta').textContent =
@@ -332,6 +357,7 @@
       document.getElementById('btn-pause').style.display = status.paused ? 'none' : 'inline-block';
       document.getElementById('btn-resume').style.display = status.paused ? 'inline-block' : 'none';
       renderAgents(status.roster || []);
+      renderCursorInbox(cursor.pending || []);
       renderRelay(relay.messages || []);
     }
 

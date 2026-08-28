@@ -24,6 +24,7 @@ from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
 from ai_meeting_room.relay.bridge import RelayBridge
+from ai_meeting_room.relay.cursor_watcher import CursorInbox, ForwardMode
 from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
 from ai_meeting_room.relay.store import RelayStore
 from ai_meeting_room.room.controller import RoomController
@@ -55,6 +56,8 @@ class InteractiveMeeting:
         self._debounce_task: asyncio.Task[None] | None = None
         self._relay: RelayBridge | None = None
         self._relay_task: asyncio.Task[None] | None = None
+        self._cursor_inbox: CursorInbox | None = None
+        self._cursor_watch_task: asyncio.Task[None] | None = None
 
     def relay_directory(self) -> Path:
         relay_path = Path(self._settings.relay_dir)
@@ -105,7 +108,9 @@ class InteractiveMeeting:
         # Relay logs silently; start muted so it doesn't interrupt the host.
         self._muted_keys.add(RELAY.key)
         self._relay.append_system("Relay connected to Cursor thread (muted by default)")
+        self._cursor_inbox = CursorInbox(self.relay_directory())
         self._relay_task = asyncio.create_task(self._relay_inbox_loop())
+        self._cursor_watch_task = asyncio.create_task(self._cursor_watch_loop())
         logger.info("Relay bridge active at %s", store.directory)
 
     async def _speak_as_relay(self, text: str) -> None:
@@ -128,6 +133,23 @@ class InteractiveMeeting:
         if not self._relay:
             raise ValueError("Relay is not enabled")
         await self._relay.deliver_from_thread(text, speak=speak)
+
+    async def _cursor_watch_loop(self) -> None:
+        assert self._cursor_inbox is not None
+        log_path = self.relay_directory() / "messages.jsonl"
+        mode: ForwardMode = (
+            "all" if self._settings.relay_forward_mode.lower() == "all" else "relay"
+        )
+        while True:
+            try:
+                queued = self._cursor_inbox.watch_messages_log(log_path, mode=mode)
+                if queued:
+                    logger.info("Queued %s message(s) for Cursor inbox", queued)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Cursor watch loop error")
+            await asyncio.sleep(self._settings.relay_cursor_poll_sec)
 
     async def _relay_inbox_loop(self) -> None:
         assert self._relay is not None
@@ -413,10 +435,14 @@ class InteractiveMeeting:
                 control_task.cancel()
                 if self._relay_task:
                     self._relay_task.cancel()
+                if self._cursor_watch_task:
+                    self._cursor_watch_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await control_task
                     if self._relay_task:
                         await self._relay_task
+                    if self._cursor_watch_task:
+                        await self._cursor_watch_task
 
     async def stop(self) -> None:
         for room, _, _ in self._rooms.values():

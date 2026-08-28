@@ -61,6 +61,19 @@ class RoomControlClient:
             response.raise_for_status()
             return response.json()
 
+    async def cursor_pending(self) -> dict[str, Any]:
+        return await self._request("GET", "/relay/cursor/pending")
+
+    async def cursor_ack(self, msg_ids: list[str] | None = None) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self._base}/relay/cursor/ack",
+                headers=self._headers,
+                json={"msg_ids": msg_ids or []},
+            )
+            response.raise_for_status()
+            return response.json()
+
 
 def format_status(payload: dict[str, Any]) -> str:
     in_call = ", ".join(a["name"] for a in payload.get("in_call", [])) or "(none)"

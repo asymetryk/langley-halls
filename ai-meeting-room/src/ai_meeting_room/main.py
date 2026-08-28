@@ -159,6 +159,19 @@ async def _cmd_room(args: argparse.Namespace) -> int:
         if args.room_action == "relay-say":
             print_result(await client.relay_say(args.message, speak=not args.log_only))
             return 0
+        if args.room_action == "cursor-pending":
+            payload = await client.cursor_pending()
+            pending = payload.get("pending", [])
+            if not pending:
+                print("No pending messages for Cursor.")
+                return 0
+            for message in pending:
+                print(f"[{message.get('ts')}] {message.get('speaker')}: {message.get('text')}")
+            return 0
+        if args.room_action == "cursor-ack":
+            result = await client.cursor_ack()
+            print(f"Acknowledged {result.get('acknowledged', 0)} message(s)")
+            return 0
     except httpx.ConnectError:
         print(
             "Could not reach the room control API. "
@@ -207,6 +220,8 @@ def main() -> None:
     relay_say = room_sub.add_parser("relay-say", help="Send a message into the room via Relay")
     relay_say.add_argument("message", help="Text for Relay to speak or log")
     relay_say.add_argument("--log-only", action="store_true", help="Log to relay without speaking")
+    room_sub.add_parser("cursor-pending", help="Show room messages waiting for Cursor")
+    room_sub.add_parser("cursor-ack", help="Mark all cursor inbox messages as delivered")
 
     args = parser.parse_args()
     _configure_logging(args.verbose)
