@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from urllib.parse import quote
 
 from livekit import api
 
 from ai_meeting_room.config import get_settings
+
+MEET_CUSTOM_BASE = "https://meet.livekit.io/custom/"
 
 
 def mint_human_token(*, room: str, identity: str, name: str) -> str:
@@ -30,6 +33,28 @@ def mint_human_token(*, room: str, identity: str, name: str) -> str:
     return token.to_jwt()
 
 
+def build_meet_join_url(*, livekit_url: str, token: str) -> str:
+    """One-click join URL for meet.livekit.io against a custom LiveKit project."""
+    return (
+        f"{MEET_CUSTOM_BASE}?liveKitUrl={quote(livekit_url, safe='')}"
+        f"&token={quote(token, safe='')}"
+    )
+
+
+def mint_join_link(*, room: str, identity: str, name: str, livekit_url: str | None = None) -> dict[str, str]:
+    settings = get_settings()
+    server_url = livekit_url or settings.livekit_url
+    token = mint_human_token(room=room, identity=identity, name=name)
+    return {
+        "identity": identity,
+        "name": name,
+        "room": room,
+        "livekit_url": server_url,
+        "token": token,
+        "join_url": build_meet_join_url(livekit_url=server_url, token=token),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mint a LiveKit token for a human participant")
     parser.add_argument("--room", default=None)
@@ -39,7 +64,17 @@ def main() -> None:
 
     settings = get_settings()
     room = args.room or settings.meeting_room_name
-    print(mint_human_token(room=room, identity=args.identity, name=args.name))
+    link = mint_join_link(
+        room=room,
+        identity=args.identity,
+        name=args.name,
+        livekit_url=settings.livekit_url,
+    )
+    print(link["join_url"])
+    print()
+    print(f"Room: {room}")
+    print(f"Server: {settings.livekit_url}")
+    print(f"Token (backup): {link['token']}")
 
 
 if __name__ == "__main__":

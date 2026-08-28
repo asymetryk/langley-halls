@@ -156,6 +156,26 @@
       display: none;
       max-width: 320px;
     }
+    .join-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem;
+      display: grid;
+      gap: 0.55rem;
+      margin-bottom: 0.75rem;
+    }
+    .join-card:last-child { margin-bottom: 0; }
+    .join-url {
+      font-size: 0.75rem;
+      word-break: break-all;
+      color: var(--muted);
+    }
+    a.join-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a.join-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -173,6 +193,12 @@
   </header>
 
   <main>
+    <section class="panel">
+      <h2>Join the room</h2>
+      <p class="meta" id="join-help">Loading join links…</p>
+      <div id="join-links"></div>
+    </section>
+
     <section class="panel">
       <h2>Participants</h2>
       <div id="agents" class="agents"></div>
@@ -249,6 +275,36 @@
     function badge(text, cls) {
       return `<span class="badge ${cls || ''}">${text}</span>`;
     }
+
+    function renderJoinLinks(data) {
+      const root = document.getElementById('join-links');
+      const help = document.getElementById('join-help');
+      help.textContent = data.instructions || 'Use these links to join with mic access.';
+      root.innerHTML = (data.links || []).map(link => `
+        <article class="join-card">
+          <div class="agent-top">
+            <div class="agent-name">${escapeHtml(link.name)}</div>
+            <div class="badges">${badge(link.identity, '')}</div>
+          </div>
+          <div>
+            <a class="join-link" href="${escapeHtml(link.join_url)}" target="_blank" rel="noopener">Open in LiveKit Meet →</a>
+          </div>
+          <div class="join-url">${escapeHtml(link.join_url)}</div>
+          <button type="button" data-copy="${escapeHtml(link.join_url)}">Copy link</button>
+        </article>
+      `).join('');
+    }
+
+    document.getElementById('join-links').addEventListener('click', async (event) => {
+      const btn = event.target.closest('button[data-copy]');
+      if (!btn) return;
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        toast('Join link copied');
+      } catch (_) {
+        toast('Could not copy — select the URL manually');
+      }
+    });
 
     function renderAgents(roster) {
       const root = document.getElementById('agents');
@@ -343,10 +399,11 @@
 
     async function refresh() {
       if (busy) return;
-      const [status, relay, cursor] = await Promise.all([
+      const [status, relay, cursor, joins] = await Promise.all([
         api('/status'),
         api('/relay/messages?limit=80'),
         api('/relay/cursor/pending'),
+        api('/join-links'),
       ]);
       state = status;
       document.getElementById('room-meta').textContent =
@@ -356,6 +413,7 @@
       pill.className = 'status-pill ' + (status.paused ? 'paused' : 'live');
       document.getElementById('btn-pause').style.display = status.paused ? 'none' : 'inline-block';
       document.getElementById('btn-resume').style.display = status.paused ? 'inline-block' : 'none';
+      renderJoinLinks(joins);
       renderAgents(status.roster || []);
       renderCursorInbox(cursor.pending || []);
       renderRelay(relay.messages || []);

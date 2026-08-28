@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ai_meeting_room.config import get_settings
 from ai_meeting_room.room.controller import RoomController
+from ai_meeting_room.server.token_server import mint_join_link
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -46,6 +47,23 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/join-links", dependencies=[Depends(_auth)])
+    async def join_links() -> dict[str, Any]:
+        room = settings.meeting_room_name
+        links = [
+            mint_join_link(room=room, identity="host", name="You"),
+            mint_join_link(room=room, identity="brother", name="Brother"),
+        ]
+        return {
+            "room": room,
+            "livekit_url": settings.livekit_url,
+            "instructions": (
+                "Open the join_url in a browser. Do not use the meet.livekit.io homepage "
+                "— it connects to LiveKit's demo cloud, not this project."
+            ),
+            "links": links,
+        }
 
     @app.get("/status", dependencies=[Depends(_auth)])
     async def status() -> dict[str, Any]:
