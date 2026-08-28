@@ -196,6 +196,7 @@
   <script>
     const toastEl = document.getElementById('toast');
     let state = null;
+    let busy = false;
 
     function toast(msg) {
       toastEl.textContent = msg;
@@ -209,14 +210,20 @@
         ...options,
       });
       if (!res.ok) {
-        const detail = await res.text();
+        let detail = await res.text();
+        try {
+          const parsed = JSON.parse(detail);
+          detail = parsed.detail || detail;
+        } catch (_) {}
         throw new Error(detail || res.statusText);
       }
       const ct = res.headers.get('content-type') || '';
       return ct.includes('application/json') ? res.json() : res.text();
     }
 
-    async function action(method, path, body) {
+    async function doAction(method, path, body) {
+      if (busy) return;
+      busy = true;
       try {
         const result = await api(path, {
           method,
@@ -226,8 +233,10 @@
         await refresh();
         return result;
       } catch (err) {
-        toast(err.message);
+        toast(String(err.message || err));
         throw err;
+      } finally {
+        busy = false;
       }
     }
 
@@ -247,11 +256,15 @@
 
         const actions = [];
         if (agent.in_call) {
-          actions.push(`<button onclick="act('mute','${agent.key}')">${agent.muted ? 'Unmute' : 'Mute'}</button>`);
-          if (!agent.is_chair && !agent.is_relay) actions.push(`<button onclick="act('chair','${agent.key}')">Make chair</button>`);
-          if (!agent.is_relay) actions.push(`<button class="danger" onclick="act('kick','${agent.key}')">Kick</button>`);
+          actions.push(
+            `<button type="button" data-action="mute" data-key="${agent.key}" data-muted="${agent.muted}">${agent.muted ? 'Unmute' : 'Mute'}</button>`
+          );
+          if (!agent.is_chair) {
+            actions.push(`<button type="button" data-action="chair" data-key="${agent.key}">Make chair</button>`);
+          }
+          actions.push(`<button type="button" class="danger" data-action="kick" data-key="${agent.key}">Kick</button>`);
         } else {
-          actions.push(`<button class="primary" onclick="act('invite','${agent.key}')">Invite</button>`);
+          actions.push(`<button type="button" class="primary" data-action="invite" data-key="${agent.key}">Invite</button>`);
         }
 
         return `
@@ -286,17 +299,26 @@
       return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    window.act = async function(kind, key) {
+    document.getElementById('agents').addEventListener('click', async (event) => {
+      const btn = event.target.closest('button[data-action]');
+      if (!btn) return;
+      event.preventDefault();
+      const kind = btn.dataset.action;
+      const key = btn.dataset.key;
       if (kind === 'mute') {
-        const agent = state.roster.find(a => a.key === key);
-        return action('POST', agent?.muted ? `/unmute/${key}` : `/mute/${key}`);
+        const muted = btn.dataset.muted === 'true';
+        await doAction('POST', muted ? `/unmute/${key}` : `/mute/${key}`);
+      } else if (kind === 'kick') {
+        await doAction('POST', `/kick/${key}`);
+      } else if (kind === 'invite') {
+        await doAction('POST', `/invite/${key}`);
+      } else if (kind === 'chair') {
+        await doAction('POST', `/chair/${key}`);
       }
-      if (kind === 'kick') return action('POST', `/kick/${key}`);
-      if (kind === 'invite') return action('POST', `/invite/${key}`);
-      if (kind === 'chair') return action('POST', `/chair/${key}`);
-    };
+    });
 
     async function refresh() {
+      if (busy) return;
       const [status, relay] = await Promise.all([
         api('/status'),
         api('/relay/messages?limit=80'),
@@ -313,18 +335,18 @@
       renderRelay(relay.messages || []);
     }
 
-    document.getElementById('btn-pause').onclick = () => action('POST', '/pause');
-    document.getElementById('btn-resume').onclick = () => action('POST', '/resume');
+    document.getElementById('btn-pause').onclick = () => doAction('POST', '/pause');
+    document.getElementById('btn-resume').onclick = () => doAction('POST', '/resume');
     document.getElementById('btn-relay-send').onclick = async () => {
       const text = document.getElementById('relay-input').value.trim();
       if (!text) return;
-      await action('POST', '/relay/say', { text, speak: true });
+      await doAction('POST', '/relay/say', { text, speak: true });
       document.getElementById('relay-input').value = '';
     };
     document.getElementById('btn-relay-log').onclick = async () => {
       const text = document.getElementById('relay-input').value.trim();
       if (!text) return;
-      await action('POST', '/relay/say', { text, speak: false });
+      await doAction('POST', '/relay/say', { text, speak: false });
       document.getElementById('relay-input').value = '';
     };
 

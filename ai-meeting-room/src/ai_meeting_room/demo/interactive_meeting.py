@@ -24,6 +24,7 @@ from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
 from ai_meeting_room.relay.bridge import RelayBridge
+from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
 from ai_meeting_room.relay.store import RelayStore
 from ai_meeting_room.room.controller import RoomController
 from ai_meeting_room.server.room_control import create_room_control_app
@@ -95,16 +96,28 @@ class InteractiveMeeting:
 
     async def _start_relay(self) -> None:
         store = RelayStore(self.relay_directory())
-        self._relay = RelayBridge(store, speak=self._speak_as_relay)
+        self._relay = RelayBridge(
+            store,
+            speak=self._speak_as_relay,
+            is_muted=lambda: RELAY.key in self._muted_keys,
+        )
         await self._join_agent(RELAY)
-        self._relay.append_system("Relay connected to Cursor thread")
+        # Relay logs silently; start muted so it doesn't interrupt the host.
+        self._muted_keys.add(RELAY.key)
+        self._relay.append_system("Relay connected to Cursor thread (muted by default)")
         self._relay_task = asyncio.create_task(self._relay_inbox_loop())
         logger.info("Relay bridge active at %s", store.directory)
 
     async def _speak_as_relay(self, text: str) -> None:
+        if RELAY.key in self._muted_keys:
+            logger.info("Relay muted — not speaking: %s", text[:80])
+            return
         await self.speak_as(RELAY.key, text)
 
     async def speak_as(self, agent_key: str, text: str) -> None:
+        if agent_key in self._muted_keys:
+            logger.info("%s muted — not speaking: %s", agent_key, text[:80])
+            return
         if agent_key not in self._rooms:
             raise ValueError(f"{agent_key} is not in the call")
         _room, source, agent = self._rooms[agent_key]
@@ -254,7 +267,7 @@ class InteractiveMeeting:
     async def _announce_ready(self) -> None:
         chair_key = self._chair_key()
         names = ", ".join(a.display_name for a in self._active_agents)
-        relay_note = " Relay bridges this room to Cursor." if self._relay else ""
+        relay_note = " Relay is in the room but muted — unmute from the dashboard to hear it." if self._relay else ""
         text = f"Room is live. Say a name to reach someone — {names}.{relay_note}"
         await self.speak_as(chair_key, text)
         self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
@@ -265,8 +278,14 @@ class InteractiveMeeting:
             await self._execute_host_command(host_cmd)
             return
 
-        if self._relay and await self._relay.handle_human(text):
-            self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
+        if self._relay and RELAY.key not in self._muted_keys:
+            if await self._relay.handle_human(text):
+                return
+        elif self._relay and is_addressing_relay(text):
+            # Muted: still log to Cursor thread, but never speak or block other agents.
+            payload = extract_cursor_message(text) or text
+            self._relay.store.append(kind="thread_out", speaker="You", text=payload)
+            logger.info("Relay muted — logged without speaking: %s", text[:80])
             return
 
         if self._paused:
