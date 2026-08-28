@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import struct
@@ -22,7 +23,6 @@ AGENT_OUTPUT_RATE = 24000
 
 
 def _pcm_bytes(frame: rtc.AudioFrame) -> bytes:
-    """Raw signed 16-bit little-endian PCM for ElevenLabs user_audio_chunk."""
     return bytes(frame._data)
 
 
@@ -37,11 +37,7 @@ def _rms(pcm: bytes) -> float:
 
 
 class ElevenLabsVoiceBridge:
-    """
-    Bridges room audio ↔ ElevenLabs conversational AI WebSocket.
-
-    Uses ElevenLabs primitives for STT, TTS, turn-taking, and interruption handling.
-    """
+    """Bridges room audio ↔ ElevenLabs conversational AI WebSocket."""
 
     def __init__(self, elevenlabs_client: AsyncElevenLabs, agent_id: str, *, agent_name: str = "") -> None:
         self._client = elevenlabs_client
@@ -50,9 +46,17 @@ class ElevenLabsVoiceBridge:
         self._http: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._audio_source: rtc.AudioSource | None = None
+        self._room: rtc.Room | None = None
+        self._identity: str = ""
+        self._published_track: rtc.LocalAudioTrack | None = None
         self._pump_task: asyncio.Task | None = None
         self._human_pump_task: asyncio.Task | None = None
+        self._receive_task: asyncio.Task | None = None
+        self._human_track: rtc.Track | None = None
+        self._human_identity: str = ""
         self._chunks_sent = 0
+        self._last_spoken = asyncio.Queue(maxsize=8)
+        self._lock = asyncio.Lock()
 
     async def _signed_url(self) -> str:
         response = await self._client.conversational_ai.conversations.get_signed_url(
@@ -60,50 +64,77 @@ class ElevenLabsVoiceBridge:
         )
         return response.signed_url
 
-    async def start(self, room: rtc.Room, *, identity: str) -> rtc.LocalAudioTrack:
-        self._http = aiohttp.ClientSession()
+    async def _open_ws(self) -> None:
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+        if self._ws and not self._ws.closed:
+            return
         signed = await self._signed_url()
         self._ws = await self._http.ws_connect(signed)
         await self._ws.send_str(json.dumps({"type": "conversation_initiation_client_data"}))
+        if self._receive_task:
+            self._receive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._receive_task
+        self._receive_task = asyncio.create_task(self._elevenlabs_to_room())
 
-        self._audio_source = rtc.AudioSource(sample_rate=AGENT_OUTPUT_RATE, num_channels=1)
-        track = rtc.LocalAudioTrack.create_audio_track(f"{identity}-voice", self._audio_source)
-        await room.local_participant.publish_track(
-            track,
-            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-        )
+    async def start(self, room: rtc.Room, *, identity: str) -> rtc.LocalAudioTrack:
+        self._room = room
+        self._identity = identity
+        if self._audio_source is None:
+            self._audio_source = rtc.AudioSource(sample_rate=AGENT_OUTPUT_RATE, num_channels=1)
+            self._published_track = rtc.LocalAudioTrack.create_audio_track(f"{identity}-voice", self._audio_source)
+            await room.local_participant.publish_track(
+                self._published_track,
+                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+            )
+        await self._open_ws()
+        return self._published_track
 
-        self._pump_task = asyncio.create_task(self._elevenlabs_to_room())
-        return track
+    async def reconnect(self) -> None:
+        async with self._lock:
+            if self._ws and not self._ws.closed:
+                await self._ws.close()
+            self._ws = None
+            await self._open_ws()
+            if self._human_track:
+                await self.pump_human_track(self._human_track, participant_identity=self._human_identity)
+
+    async def send_user_message(self, text: str) -> None:
+        async with self._lock:
+            if not self._ws or self._ws.closed:
+                await self._open_ws()
+            assert self._ws is not None
+            await self._ws.send_str(json.dumps({"type": "user_message", "text": text}))
+            logger.info("%s prompted: %s", self._agent_name, text[:120])
+
+    async def wait_for_speech(self, timeout: float = 45.0) -> str:
+        return await asyncio.wait_for(self._last_spoken.get(), timeout=timeout)
 
     async def pump_human_track(self, track: rtc.Track, *, participant_identity: str) -> None:
-        """Forward one human microphone track directly to ElevenLabs (official bridge pattern)."""
+        self._human_track = track
+        self._human_identity = participant_identity
         if self._human_pump_task:
             self._human_pump_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._human_pump_task
-            except asyncio.CancelledError:
-                pass
 
         async def _run() -> None:
-            assert self._ws is not None
             logger.info("%s pumping audio from %s", self._agent_name, participant_identity)
             stream = rtc.AudioStream(track, sample_rate=USER_INPUT_RATE, num_channels=1)
             try:
                 async for event in stream:
+                    if not self._ws or self._ws.closed:
+                        await self.reconnect()
                     pcm = _pcm_bytes(event.frame)
                     self._chunks_sent += 1
-                    if self._chunks_sent % 50 == 0:
-                        level = _rms(pcm)
-                        logger.info(
-                            "%s audio from %s: %d chunks sent, rms=%.0f",
-                            self._agent_name,
-                            participant_identity,
-                            self._chunks_sent,
-                            level,
-                        )
                     payload = base64.b64encode(pcm).decode()
-                    await self._ws.send_str(json.dumps({"user_audio_chunk": payload}))
+                    try:
+                        assert self._ws is not None
+                        await self._ws.send_str(json.dumps({"user_audio_chunk": payload}))
+                    except (aiohttp.ClientConnectionError, ConnectionResetError):
+                        logger.warning("%s WS dropped while pumping; reconnecting", self._agent_name)
+                        await self.reconnect()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -143,6 +174,8 @@ class ElevenLabsVoiceBridge:
                     text = event.get("agent_response_event", {}).get("agent_response", "")
                     if text:
                         logger.info("%s spoke: %s", self._agent_name, text)
+                        with contextlib.suppress(asyncio.QueueFull):
+                            self._last_spoken.put_nowait(text)
                 elif etype == "ping":
                     event_id = event.get("ping_event", {}).get("event_id")
                     await self._ws.send_str(json.dumps({"type": "pong", "event_id": event_id}))
@@ -152,14 +185,12 @@ class ElevenLabsVoiceBridge:
             logger.exception("%s ElevenLabs receive loop failed", self._agent_name)
 
     async def close(self) -> None:
-        for task in (self._pump_task, self._human_pump_task):
+        for task in (self._pump_task, self._human_pump_task, self._receive_task):
             if task:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
-        if self._ws:
+        if self._ws and not self._ws.closed:
             await self._ws.close()
         if self._http:
             await self._http.close()

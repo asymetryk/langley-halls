@@ -72,6 +72,20 @@ async def _cmd_run() -> int:
     return 0
 
 
+async def _cmd_demo() -> int:
+    from ai_meeting_room.demo.speak_demo import run_speak_demo
+
+    settings = get_settings()
+    logging.getLogger(__name__).info(
+        "Running speak demo (OmniRoute + ElevenLabs TTS → LiveKit). Join the room to listen."
+    )
+    try:
+        await run_speak_demo(settings)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def _cmd_reasoning_api() -> int:
     settings = get_settings()
     app = create_reasoning_app()
@@ -87,6 +101,7 @@ def main() -> None:
 
     sub.add_parser("validate", help="Check configuration and adapters")
     sub.add_parser("run", help="Join all four AI participants to the LiveKit room")
+    sub.add_parser("demo", help="Run speak demo: OmniRoute + TTS into LiveKit room")
     sub.add_parser("reasoning-api", help="Start Custom LLM server for ElevenLabs agents")
 
     args = parser.parse_args()
@@ -96,6 +111,8 @@ def main() -> None:
         sys.exit(asyncio.run(_cmd_validate()))
     if args.command == "run":
         sys.exit(asyncio.run(_cmd_run()))
+    if args.command == "demo":
+        sys.exit(asyncio.run(_cmd_demo()))
     if args.command == "reasoning-api":
         sys.exit(_cmd_reasoning_api())
 

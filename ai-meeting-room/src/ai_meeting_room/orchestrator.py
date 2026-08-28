@@ -36,6 +36,10 @@ class MeetingOrchestrator:
         }
 
     @property
+    def participants(self) -> list[LiveKitParticipant]:
+        return self._participants
+
+    @property
     def memories(self) -> dict[str, AgentMemory]:
         return self._memories
 
