@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     interactive_max_reply_tokens: int = Field(default=80, alias="INTERACTIVE_MAX_REPLY_TOKENS")
     interactive_default_chair: str = Field(default="project_alpha", alias="INTERACTIVE_DEFAULT_CHAIR")
     interactive_excluded_agents: str = Field(default="fred", alias="INTERACTIVE_EXCLUDED_AGENTS")
+    conversation_idle_sec: float = Field(default=60.0, alias="CONVERSATION_IDLE_SEC")
 
     room_control_host: str = Field(default="127.0.0.1", alias="ROOM_CONTROL_HOST")
     room_control_port: int = Field(default=8092, alias="ROOM_CONTROL_PORT")

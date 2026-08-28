@@ -19,7 +19,12 @@ from ai_meeting_room.adapters.room.livekit_participant import (
 )
 from ai_meeting_room.agents.definitions import RELAY, AgentDefinition, interactive_agents
 from ai_meeting_room.agents.host_commands import HostCommand, parse_host_command
-from ai_meeting_room.agents.tuning import pick_responder
+from ai_meeting_room.agents.tuning import (
+    ConversationState,
+    agent_asked_question,
+    conversation_prompt_note,
+    pick_responder,
+)
 from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
@@ -60,6 +65,7 @@ class InteractiveMeeting:
         self._cursor_inbox: CursorInbox | None = None
         self._cursor_watch_task: asyncio.Task[None] | None = None
         self._cursor_process_task: asyncio.Task[None] | None = None
+        self._conversation = ConversationState(idle_timeout_sec=settings.conversation_idle_sec)
 
     def relay_directory(self) -> Path:
         relay_path = Path(self._settings.relay_dir)
@@ -329,7 +335,10 @@ class InteractiveMeeting:
         chair_key = self._chair_key()
         names = ", ".join(a.display_name for a in self._active_agents)
         relay_note = " Relay is in the room but muted — unmute from the dashboard to hear it." if self._relay else ""
-        text = f"Room is live. Say a name to reach someone — {names}.{relay_note}"
+        text = (
+            f"Room is live. Say someone's name to start a conversation — {names}. "
+            f"I won't jump in unless you address me or we're already talking.{relay_note}"
+        )
         await self.speak_as(chair_key, text)
         self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
 
@@ -363,6 +372,7 @@ class InteractiveMeeting:
             text,
             default_chair=self._chair_key(),
             active_agents=self._responding_keys(),
+            conversation=self._conversation,
         )
         if key is None:
             logger.info("No response warranted for: %s", text)
@@ -378,10 +388,16 @@ class InteractiveMeeting:
             memory.remember("You", text)
 
             history = "\n".join(f"- {s}: {t}" for s, t in memory.as_messages()[-6:])
+            convo_note = conversation_prompt_note(
+                agent_key=key,
+                conversation=self._conversation,
+                transcript=text,
+            )
             user = (
                 f'The human said: "{text}"\n\n'
-                f"Recent context:\n{history}\n\n"
-                "Give a brief spoken reply. Do not take over the conversation."
+                f"Conversation context: {convo_note}\n\n"
+                f"Recent history with this agent:\n{history}\n\n"
+                "Give a brief spoken reply."
             )
 
             reply = await _omniroute_line(
@@ -397,6 +413,7 @@ class InteractiveMeeting:
 
             pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=reply)
             await _play_pcm(source, pcm)
+            self._conversation.touch(key, awaiting_reply=agent_asked_question(reply))
         finally:
             self._responding = False
             self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
