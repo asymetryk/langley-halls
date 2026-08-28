@@ -43,19 +43,28 @@ class LiveKitParticipant:
         self._room = rtc.Room()
         self._connected = asyncio.Event()
         self._human_tracks: set[str] = set()
+        self._bridge_ready = False
+        self._pending_human: list[tuple[rtc.Track, str]] = []
 
     @property
     def room(self) -> rtc.Room:
         return self._room
 
-    def _on_human_audio_track(self, track: rtc.Track, participant_identity: str) -> None:
+    async def _attach_human_track(self, track: rtc.Track, participant_identity: str) -> None:
         if track.sid in self._human_tracks:
             return
         self._human_tracks.add(track.sid)
-        asyncio.create_task(
-            self._voice_bridge.pump_human_track(track, participant_identity=participant_identity)
-        )
+        await self._voice_bridge.pump_human_track(track, participant_identity=participant_identity)
         logger.info("%s now listening to %s", self.display_name, participant_identity)
+
+    def _on_human_audio_track(self, track: rtc.Track, participant_identity: str) -> None:
+        if track.sid in self._human_tracks:
+            return
+        if not self._bridge_ready:
+            self._pending_human.append((track, participant_identity))
+            logger.info("%s queued audio from %s (bridge starting)", self.display_name, participant_identity)
+            return
+        asyncio.create_task(self._attach_human_track(track, participant_identity))
 
     async def connect(self) -> None:
         @self._room.on("track_subscribed")
@@ -87,13 +96,23 @@ class LiveKitParticipant:
 
         await self._room.connect(self._livekit_url, self._token)
         await self._voice_bridge.start(self._room, identity=self.identity)
+        self._bridge_ready = True
+
+        for track, participant_identity in self._pending_human:
+            await self._attach_human_track(track, participant_identity)
+        self._pending_human.clear()
 
         for participant in self._room.remote_participants.values():
             if not is_human_participant(participant.identity):
                 continue
             for pub in participant.track_publications.values():
-                if pub.track and pub.kind == rtc.TrackKind.KIND_AUDIO:
-                    self._on_human_audio_track(pub.track, participant.identity)
+                if pub.kind != rtc.TrackKind.KIND_AUDIO:
+                    continue
+                if pub.track:
+                    await self._attach_human_track(pub.track, participant.identity)
+                else:
+                    # Ensure subscription for tracks not yet materialized.
+                    pub.set_subscribed(True)
 
         self._connected.set()
         logger.info("%s joined room as %s", self.display_name, self.identity)
