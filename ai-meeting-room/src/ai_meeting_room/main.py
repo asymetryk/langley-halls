@@ -72,6 +72,18 @@ async def _cmd_run() -> int:
     return 0
 
 
+async def _cmd_interactive() -> int:
+    from ai_meeting_room.demo.interactive_meeting import InteractiveMeeting
+
+    meeting = InteractiveMeeting(get_settings())
+    logging.getLogger(__name__).info(
+        "Interactive mode: your mic → STT → OmniRoute → ElevenLabs TTS. "
+        "Say a name (Fred, Missy, Architect, Project Alpha) or talk to Fred by default."
+    )
+    try:
+        await meeting.run_until_cancelled()
+    except KeyboardInterrupt:
+        await meeting.stop()
 async def _cmd_demo() -> int:
     from ai_meeting_room.demo.speak_demo import run_speak_demo
 
@@ -102,6 +114,7 @@ def main() -> None:
     sub.add_parser("validate", help="Check configuration and adapters")
     sub.add_parser("run", help="Join all four AI participants to the LiveKit room")
     sub.add_parser("demo", help="Run speak demo: OmniRoute + TTS into LiveKit room")
+    sub.add_parser("interactive", help="Listen to your mic and respond via OmniRoute + TTS")
     sub.add_parser("reasoning-api", help="Start Custom LLM server for ElevenLabs agents")
 
     args = parser.parse_args()
@@ -113,6 +126,8 @@ def main() -> None:
         sys.exit(asyncio.run(_cmd_run()))
     if args.command == "demo":
         sys.exit(asyncio.run(_cmd_demo()))
+    if args.command == "interactive":
+        sys.exit(asyncio.run(_cmd_interactive()))
     if args.command == "reasoning-api":
         sys.exit(_cmd_reasoning_api())
 
