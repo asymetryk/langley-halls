@@ -34,6 +34,7 @@ from ai_meeting_room.relay.cursor_watcher import CursorInbox, ForwardMode
 from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
 from ai_meeting_room.relay.store import RelayStore
 from ai_meeting_room.room.controller import RoomController
+from ai_meeting_room.stt.normalize import default_stt_keyterms, normalize_transcript
 from ai_meeting_room.server.room_control import create_room_control_app
 from elevenlabs import AsyncElevenLabs
 from uvicorn import Config, Server
@@ -216,6 +217,7 @@ class InteractiveMeeting:
             language="en",
             api_key=self._settings.livekit_api_key,
             api_secret=self._settings.livekit_api_secret,
+            extra_kwargs={"keyterm": default_stt_keyterms()},
         )
 
         human_track: rtc.Track | None = None
@@ -291,6 +293,10 @@ class InteractiveMeeting:
                     text = speech.alternatives[0].text.strip()
                     if not text or len(text) < 2:
                         continue
+                    raw = text
+                    text = normalize_transcript(text)
+                    if text != raw:
+                        logger.info("STT normalized: %r → %r", raw, text)
                     logger.info("Human said: %s", text)
                     if self._relay:
                         self._relay.log_human(text)
