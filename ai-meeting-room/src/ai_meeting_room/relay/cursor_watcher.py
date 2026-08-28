@@ -13,6 +13,7 @@ from ai_meeting_room.relay.participant import is_addressing_relay
 ForwardMode = Literal["relay", "all"]
 
 CURSOR_ADDRESS = re.compile(r"^(?:hey\s+)?cursor\b", re.IGNORECASE)
+TELL_CURSOR = re.compile(r"\btell\s+cursor\b", re.IGNORECASE)
 
 
 @dataclass
@@ -33,7 +34,12 @@ def is_for_cursor(text: str, *, mode: ForwardMode) -> bool:
         return True
     if is_addressing_relay(text):
         return True
-    return bool(CURSOR_ADDRESS.match(text.strip()))
+    stripped = text.strip()
+    if CURSOR_ADDRESS.match(stripped):
+        return True
+    if TELL_CURSOR.search(stripped):
+        return True
+    return False
 
 
 class CursorInbox:

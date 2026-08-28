@@ -118,4 +118,11 @@ def create_room_control_app(controller: RoomController) -> FastAPI:
         ids = body.msg_ids if body and body.msg_ids else None
         return controller.cursor_ack(ids)
 
+    @app.post("/relay/cursor/process", dependencies=[Depends(_auth)])
+    async def cursor_process(speak: bool = True) -> dict[str, Any]:
+        try:
+            return await controller.cursor_process(speak=speak)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return app

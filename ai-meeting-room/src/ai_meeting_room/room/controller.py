@@ -13,6 +13,7 @@ from ai_meeting_room.agents.definitions import ALL_AGENTS, ALL_PARTICIPANTS, REL
 from ai_meeting_room.agents.host_commands import all_agent_keys
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE
 from ai_meeting_room.memory.store import AgentMemory
+from ai_meeting_room.relay.cursor_processor import process_cursor_inbox
 
 if TYPE_CHECKING:
     from ai_meeting_room.demo.interactive_meeting import InteractiveMeeting
@@ -199,3 +200,15 @@ class RoomController:
             return {"ok": True, "acknowledged": 0}
         count = meeting._cursor_inbox.mark_delivered(msg_ids)
         return {"ok": True, "acknowledged": count}
+
+    async def cursor_process(self, *, speak: bool = True) -> dict[str, Any]:
+        meeting = self._meeting
+        if not meeting._cursor_inbox:
+            raise ValueError("Cursor inbox not enabled")
+        count = await process_cursor_inbox(
+            meeting,
+            meeting._cursor_inbox,
+            meeting._settings,
+            speak=speak,
+        )
+        return {"ok": True, "processed": count, "message": f"Processed {count} inbox message(s)"}

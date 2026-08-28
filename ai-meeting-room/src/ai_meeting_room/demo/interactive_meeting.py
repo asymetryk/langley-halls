@@ -24,6 +24,7 @@ from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
 from ai_meeting_room.relay.bridge import RelayBridge
+from ai_meeting_room.relay.cursor_processor import backfill_inbox_from_log, process_cursor_inbox
 from ai_meeting_room.relay.cursor_watcher import CursorInbox, ForwardMode
 from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
 from ai_meeting_room.relay.store import RelayStore
@@ -58,6 +59,7 @@ class InteractiveMeeting:
         self._relay_task: asyncio.Task[None] | None = None
         self._cursor_inbox: CursorInbox | None = None
         self._cursor_watch_task: asyncio.Task[None] | None = None
+        self._cursor_process_task: asyncio.Task[None] | None = None
 
     def relay_directory(self) -> Path:
         relay_path = Path(self._settings.relay_dir)
@@ -109,8 +111,16 @@ class InteractiveMeeting:
         self._muted_keys.add(RELAY.key)
         self._relay.append_system("Relay connected to Cursor thread (muted by default)")
         self._cursor_inbox = CursorInbox(self.relay_directory())
+        log_path = self.relay_directory() / "messages.jsonl"
+        mode: ForwardMode = (
+            "all" if self._settings.relay_forward_mode.lower() == "all" else "relay"
+        )
+        backfilled = backfill_inbox_from_log(self._cursor_inbox, log_path, mode=mode)
+        if backfilled:
+            logger.info("Backfilled %s message(s) into Cursor inbox", backfilled)
         self._relay_task = asyncio.create_task(self._relay_inbox_loop())
         self._cursor_watch_task = asyncio.create_task(self._cursor_watch_loop())
+        self._cursor_process_task = asyncio.create_task(self._cursor_process_loop())
         logger.info("Relay bridge active at %s", store.directory)
 
     async def _speak_as_relay(self, text: str) -> None:
@@ -150,6 +160,25 @@ class InteractiveMeeting:
             except Exception:
                 logger.exception("Cursor watch loop error")
             await asyncio.sleep(self._settings.relay_cursor_poll_sec)
+
+    async def _cursor_process_loop(self) -> None:
+        """Auto-reply to Cursor inbox via OmniRoute + Relay."""
+        assert self._cursor_inbox is not None
+        while True:
+            try:
+                pending = self._cursor_inbox.pending()
+                if pending:
+                    await process_cursor_inbox(
+                        self,
+                        self._cursor_inbox,
+                        self._settings,
+                        speak=True,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Cursor process loop error")
+            await asyncio.sleep(max(2.0, self._settings.relay_cursor_poll_sec))
 
     async def _relay_inbox_loop(self) -> None:
         assert self._relay is not None
@@ -437,12 +466,16 @@ class InteractiveMeeting:
                     self._relay_task.cancel()
                 if self._cursor_watch_task:
                     self._cursor_watch_task.cancel()
+                if self._cursor_process_task:
+                    self._cursor_process_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await control_task
                     if self._relay_task:
                         await self._relay_task
                     if self._cursor_watch_task:
                         await self._cursor_watch_task
+                    if self._cursor_process_task:
+                        await self._cursor_process_task
 
     async def stop(self) -> None:
         for room, _, _ in self._rooms.values():
