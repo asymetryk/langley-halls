@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from pathlib import Path
 
 from livekit import rtc
 from livekit.agents import inference
@@ -16,12 +17,14 @@ from ai_meeting_room.adapters.room.livekit_participant import (
     is_human_participant,
     mint_participant_token,
 )
-from ai_meeting_room.agents.definitions import AgentDefinition, interactive_agents
+from ai_meeting_room.agents.definitions import RELAY, AgentDefinition, interactive_agents
 from ai_meeting_room.agents.host_commands import HostCommand, parse_host_command
 from ai_meeting_room.agents.tuning import pick_responder
 from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
+from ai_meeting_room.relay.bridge import RelayBridge
+from ai_meeting_room.relay.store import RelayStore
 from ai_meeting_room.room.controller import RoomController
 from ai_meeting_room.server.room_control import create_room_control_app
 from elevenlabs import AsyncElevenLabs
@@ -44,36 +47,86 @@ class InteractiveMeeting:
         self._listen_room: rtc.Room | None = None
         self._responding = False
         self._paused = False
+        self._muted_keys: set[str] = set()
         self._chair_key_override: str | None = None
         self._cooldown_until = 0.0
         self._debounce_buffer: list[str] = []
         self._debounce_task: asyncio.Task[None] | None = None
+        self._relay: RelayBridge | None = None
+        self._relay_task: asyncio.Task[None] | None = None
+
+    def relay_directory(self) -> Path:
+        relay_path = Path(self._settings.relay_dir)
+        if not relay_path.is_absolute():
+            relay_path = Path.cwd() / relay_path
+        return relay_path
 
     async def start(self) -> None:
         if self._excluded:
             logger.info("Excluded from call: %s", ", ".join(sorted(self._excluded)))
 
         for agent in self._active_agents:
-            room = rtc.Room()
-            token = mint_participant_token(
-                api_key=self._settings.livekit_api_key,
-                api_secret=self._settings.livekit_api_secret,
-                room_name=self._settings.meeting_room_name,
-                identity=agent.identity,
-                name=agent.display_name,
-            )
-            await room.connect(self._settings.livekit_url, token)
-            source = rtc.AudioSource(sample_rate=OUTPUT_RATE, num_channels=1)
-            track = rtc.LocalAudioTrack.create_audio_track(f"{agent.identity}-voice", source)
-            await room.local_participant.publish_track(
-                track,
-                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-            )
-            self._rooms[agent.key] = (room, source, agent)
-            logger.info("%s joined (interactive)", agent.display_name)
+            await self._join_agent(agent)
+
+        if self._settings.relay_enabled:
+            await self._start_relay()
 
         self._listen_room = next(iter(self._rooms.values()))[0]
         asyncio.create_task(self._listen_loop())
+
+    async def _join_agent(self, agent: AgentDefinition) -> None:
+        room = rtc.Room()
+        token = mint_participant_token(
+            api_key=self._settings.livekit_api_key,
+            api_secret=self._settings.livekit_api_secret,
+            room_name=self._settings.meeting_room_name,
+            identity=agent.identity,
+            name=agent.display_name,
+        )
+        await room.connect(self._settings.livekit_url, token)
+        source = rtc.AudioSource(sample_rate=OUTPUT_RATE, num_channels=1)
+        track = rtc.LocalAudioTrack.create_audio_track(f"{agent.identity}-voice", source)
+        await room.local_participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+        self._rooms[agent.key] = (room, source, agent)
+        logger.info("%s joined (interactive)", agent.display_name)
+
+    async def _start_relay(self) -> None:
+        store = RelayStore(self.relay_directory())
+        self._relay = RelayBridge(store, speak=self._speak_as_relay)
+        await self._join_agent(RELAY)
+        self._relay.append_system("Relay connected to Cursor thread")
+        self._relay_task = asyncio.create_task(self._relay_inbox_loop())
+        logger.info("Relay bridge active at %s", store.directory)
+
+    async def _speak_as_relay(self, text: str) -> None:
+        await self.speak_as(RELAY.key, text)
+
+    async def speak_as(self, agent_key: str, text: str) -> None:
+        if agent_key not in self._rooms:
+            raise ValueError(f"{agent_key} is not in the call")
+        _room, source, agent = self._rooms[agent_key]
+        pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=text)
+        await _play_pcm(source, pcm)
+
+    async def deliver_thread_message(self, text: str, *, speak: bool) -> None:
+        if not self._relay:
+            raise ValueError("Relay is not enabled")
+        await self._relay.deliver_from_thread(text, speak=speak)
+
+    async def _relay_inbox_loop(self) -> None:
+        assert self._relay is not None
+        while True:
+            try:
+                for message in self._relay.pop_inbound():
+                    await self._relay.deliver_from_thread(message.text, speak=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Relay inbox loop error")
+            await asyncio.sleep(0.75)
 
     async def _listen_loop(self) -> None:
         assert self._listen_room is not None
@@ -159,6 +212,8 @@ class InteractiveMeeting:
                     if not text or len(text) < 2:
                         continue
                     logger.info("Human said: %s", text)
+                    if self._relay:
+                        self._relay.log_human(text)
                     self._queue_utterance(text)
             finally:
                 pump_task.cancel()
@@ -166,7 +221,6 @@ class InteractiveMeeting:
                     await pump_task
 
     def _queue_utterance(self, text: str) -> None:
-        """Debounce rapid STT finals into one utterance."""
         self._debounce_buffer.append(text)
         if self._debounce_task and not self._debounce_task.done():
             self._debounce_task.cancel()
@@ -189,22 +243,30 @@ class InteractiveMeeting:
         chair = self._settings.interactive_default_chair
         if chair in self._rooms:
             return chair
+        for key in self._rooms:
+            if key != RELAY.key:
+                return key
         return next(iter(self._rooms))
 
+    def _responding_keys(self) -> set[str]:
+        return self._active_keys - self._muted_keys
+
     async def _announce_ready(self) -> None:
-        """Short room cue from the chair — agents stay quiet until addressed."""
         chair_key = self._chair_key()
-        _room, source, agent = self._rooms[chair_key]
         names = ", ".join(a.display_name for a in self._active_agents)
-        text = f"Room is live. Say a name to reach someone — {names}."
-        pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=text)
-        await _play_pcm(source, pcm)
+        relay_note = " Relay bridges this room to Cursor." if self._relay else ""
+        text = f"Room is live. Say a name to reach someone — {names}.{relay_note}"
+        await self.speak_as(chair_key, text)
         self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
 
     async def _handle_utterance(self, text: str) -> None:
         host_cmd = parse_host_command(text)
         if host_cmd:
             await self._execute_host_command(host_cmd)
+            return
+
+        if self._relay and await self._relay.handle_human(text):
+            self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
             return
 
         if self._paused:
@@ -220,7 +282,7 @@ class InteractiveMeeting:
         key = pick_responder(
             text,
             default_chair=self._chair_key(),
-            active_agents=self._active_keys,
+            active_agents=self._responding_keys(),
         )
         if key is None:
             logger.info("No response warranted for: %s", text)
@@ -250,6 +312,8 @@ class InteractiveMeeting:
             )
             memory.remember(agent.display_name, reply)
             logger.info("%s replies: %s", agent.display_name, reply)
+            if self._relay:
+                self._relay.log_agent(agent.display_name, reply)
 
             pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=reply)
             await _play_pcm(source, pcm)
@@ -300,9 +364,7 @@ class InteractiveMeeting:
         if chair_key not in self._rooms:
             logger.info("Host ack (no speaker in room): %s", message)
             return
-        _room, source, agent = self._rooms[chair_key]
-        pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=message)
-        await _play_pcm(source, pcm)
+        await self.speak_as(chair_key, message)
         self._cooldown_until = time.monotonic() + self._settings.interactive_cooldown_sec
 
     async def _run_control_server(self) -> None:
@@ -316,7 +378,7 @@ class InteractiveMeeting:
         )
         server = Server(config)
         logger.info(
-            "Host control API on http://%s:%s",
+            "Host dashboard: http://%s:%s/",
             self._settings.room_control_host,
             self._settings.room_control_port,
         )
@@ -330,8 +392,12 @@ class InteractiveMeeting:
                 await asyncio.Event().wait()
             finally:
                 control_task.cancel()
+                if self._relay_task:
+                    self._relay_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await control_task
+                    if self._relay_task:
+                        await self._relay_task
 
     async def stop(self) -> None:
         for room, _, _ in self._rooms.values():

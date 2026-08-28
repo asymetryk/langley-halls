@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     room_control_port: int = Field(default=8092, alias="ROOM_CONTROL_PORT")
     room_control_token: str = Field(default="", alias="ROOM_CONTROL_TOKEN")
 
+    relay_enabled: bool = Field(default=True, alias="RELAY_ENABLED")
+    relay_dir: str = Field(default="relay", alias="RELAY_DIR")
+
     def interactive_excluded_keys(self) -> set[str]:
         return {key.strip().lower() for key in self.interactive_excluded_agents.split(",") if key.strip()}
 

@@ -61,11 +61,23 @@ Do not push the agenda forward unless the human asks what is next.
     voice_id="XB0fDUnXU5powFXDhCwa",
 )
 
+RELAY = AgentDefinition(
+    key="relay",
+    display_name="Relay",
+    identity="ai-relay",
+    system_prompt="""You are Relay, the bridge between this voice room and the Cursor session.
+When the human addresses you, acknowledge briefly that their message was passed to Cursor.
+Never hold opinions or run the meeting. One short sentence only.""",
+    voice_id="EXAVITQu4vr4xnSDxMaL",
+)
+
 ALL_AGENTS: tuple[AgentDefinition, ...] = (FRED, MISSY, ARCHITECT, PROJECT_ALPHA)
+SPECIAL_AGENTS: tuple[AgentDefinition, ...] = (RELAY,)
+ALL_PARTICIPANTS: tuple[AgentDefinition, ...] = ALL_AGENTS + SPECIAL_AGENTS
 
 
 def agent_by_key(key: str) -> AgentDefinition | None:
-    for agent in ALL_AGENTS:
+    for agent in ALL_PARTICIPANTS:
         if agent.key == key:
             return agent
     return None

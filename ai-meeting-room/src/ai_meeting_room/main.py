@@ -86,7 +86,7 @@ async def _cmd_interactive() -> int:
     logging.getLogger(__name__).info(
         "Interactive mode: your mic → STT → OmniRoute → ElevenLabs TTS. "
         "In the room: %s%s. Name someone or ask a room-wide question. "
-        "Host controls: http://%s:%s or `python -m ai_meeting_room.main room ...`",
+        "Host dashboard: http://%s:%s/",
         names,
         excluded_note,
         settings.room_control_host,
@@ -145,6 +145,20 @@ async def _cmd_room(args: argparse.Namespace) -> int:
         if args.room_action == "resume":
             print_result(await client.resume())
             return 0
+        if args.room_action == "mute":
+            print_result(await client.mute(args.agent))
+            return 0
+        if args.room_action == "unmute":
+            print_result(await client.unmute(args.agent))
+            return 0
+        if args.room_action == "relay-tail":
+            payload = await client.relay_messages(limit=args.limit)
+            for message in payload.get("messages", []):
+                print(f"[{message.get('ts')}] {message.get('speaker')}: {message.get('text')}")
+            return 0
+        if args.room_action == "relay-say":
+            print_result(await client.relay_say(args.message, speak=not args.log_only))
+            return 0
     except httpx.ConnectError:
         print(
             "Could not reach the room control API. "
@@ -184,6 +198,15 @@ def main() -> None:
     invite.add_argument("agent", help="Agent key or name")
     chair = room_sub.add_parser("chair", help="Set the meeting chair")
     chair.add_argument("agent", help="Agent key or name")
+    mute = room_sub.add_parser("mute", help="Mute an agent (won't respond)")
+    mute.add_argument("agent", help="Agent key or name")
+    unmute = room_sub.add_parser("unmute", help="Unmute an agent")
+    unmute.add_argument("agent", help="Agent key or name")
+    relay_tail = room_sub.add_parser("relay-tail", help="Show relay messages (room ↔ Cursor)")
+    relay_tail.add_argument("--limit", type=int, default=30)
+    relay_say = room_sub.add_parser("relay-say", help="Send a message into the room via Relay")
+    relay_say.add_argument("message", help="Text for Relay to speak or log")
+    relay_say.add_argument("--log-only", action="store_true", help="Log to relay without speaking")
 
     args = parser.parse_args()
     _configure_logging(args.verbose)

@@ -42,6 +42,25 @@ class RoomControlClient:
     async def resume(self) -> dict[str, Any]:
         return await self._request("POST", "/resume")
 
+    async def mute(self, agent_key: str) -> dict[str, Any]:
+        return await self._request("POST", f"/mute/{agent_key}")
+
+    async def unmute(self, agent_key: str) -> dict[str, Any]:
+        return await self._request("POST", f"/unmute/{agent_key}")
+
+    async def relay_messages(self, limit: int = 50) -> dict[str, Any]:
+        return await self._request("GET", f"/relay/messages?limit={limit}")
+
+    async def relay_say(self, text: str, *, speak: bool = True) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self._base}/relay/say",
+                headers=self._headers,
+                json={"text": text, "speak": speak},
+            )
+            response.raise_for_status()
+            return response.json()
+
 
 def format_status(payload: dict[str, Any]) -> str:
     in_call = ", ".join(a["name"] for a in payload.get("in_call", [])) or "(none)"
