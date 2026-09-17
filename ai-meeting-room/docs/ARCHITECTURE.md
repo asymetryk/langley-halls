@@ -58,7 +58,7 @@ flowchart TB
     R <-->|WebRTC| W1 & W2 & W3 & W4
     VB <-->|ConvAI WebSocket\n(STT / TTS / turn / interrupt)| EL1 & EL2 & EL3 & EL4
     EL1 & EL2 & EL3 & EL4 -->|Custom LLM SSE| API
-    CHAIN -->|elevenlabs_api_key| VB
+    CHAIN -->|elevenlabs langley halls| VB
 
     W1 --- PerWorker
     W2 --- PerWorker

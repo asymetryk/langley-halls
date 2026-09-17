@@ -33,20 +33,25 @@ cp .env.example .env
 
 ### 2. Configure secrets
 
-ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`:
+ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`. `validate`, `interactive`, `demo`, and ConvAI `run` all share this adapter chain.
+
+Pocket SoT (self-hosted). Columns are **Name / Notes / Secret / Last modified** — the value is in `Secret`, not `Value`. Langley row Name is `elevenlabs langley halls` (there is no `elevenlabs_api_key` row). Database tokens 401 on `/api/applications/`; only table-row reads work.
 
 | Baserow column | Example |
 |----------------|---------|
-| Name | `elevenlabs_api_key` |
-| Value | `sk_…` |
+| Name | `elevenlabs langley halls` |
+| Secret | (API key; do not commit) |
+| Notes | optional |
+| Last modified | system |
 
-Environment:
+Environment (token from env only — never commit `BASEROW_API_TOKEN`):
 
 ```bash
-BASEROW_API_URL=https://api.baserow.io
-BASEROW_API_TOKEN=…
-BASEROW_SECRETS_TABLE_ID=12345
-ELEVENLABS_SECRET_NAME=elevenlabs_api_key
+BASEROW_API_URL=https://baserow.tail21f530.ts.net
+BASEROW_API_TOKEN=          # set in .env, not in git
+BASEROW_SECRETS_TABLE_ID=828
+BASEROW_SECRET_VALUE_FIELD=Secret
+ELEVENLABS_SECRET_NAME=elevenlabs langley halls
 ```
 
 ### 3. Start reasoning API (Custom LLM for ElevenLabs)
@@ -88,10 +93,15 @@ python -m ai_meeting_room.server.token_server --identity host --name "You"
 
 Join the room with [LiveKit Meet](https://meet.livekit.io/) or your own client using `LIVEKIT_URL`, room name `ai-meeting-room`, and the token.
 
-### Validate configuration
+### Validate configuration (interactive secrets)
+
+`validate` checks the **interactive** path: LiveKit, ElevenLabs TTS, and OmniRoute.
+It prints `pass` / `fail` / `skip` only — never key material. Exit **1** if any of
+those three required checks fail; ConvAI agent IDs are optional (`main run` only).
 
 ```bash
-python -m ai_meeting_room.main validate
+python -m ai_meeting_room.main validate           # presence + cheap pings
+python -m ai_meeting_room.main validate --offline # presence only (no network)
 ```
 
 ## Project layout

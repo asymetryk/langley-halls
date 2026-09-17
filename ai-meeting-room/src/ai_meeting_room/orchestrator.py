@@ -8,7 +8,7 @@ import logging
 from elevenlabs import AsyncElevenLabs
 
 from ai_meeting_room.adapters.room.livekit_participant import LiveKitParticipant, mint_participant_token
-from ai_meeting_room.adapters.secrets import build_secrets_adapter
+from ai_meeting_room.adapters.secrets import resolve_elevenlabs_api_key
 from ai_meeting_room.adapters.voice.elevenlabs_bridge import ElevenLabsVoiceBridge
 from ai_meeting_room.agents.definitions import ALL_AGENTS, AgentDefinition
 from ai_meeting_room.config import Settings
@@ -44,17 +44,7 @@ class MeetingOrchestrator:
         return self._memories
 
     async def _resolve_api_key(self) -> str:
-        secrets = build_secrets_adapter(self._settings)
-        key = await secrets.get_secret(self._settings.elevenlabs_secret_name)
-        if key:
-            logger.info("Loaded ElevenLabs API key from secrets adapter")
-            return key
-        if self._settings.elevenlabs_api_key:
-            logger.info("Using ElevenLabs API key from environment")
-            return self._settings.elevenlabs_api_key
-        raise RuntimeError(
-            "ElevenLabs API key not found. Configure Baserow secrets table or ELEVENLABS_API_KEY."
-        )
+        return await resolve_elevenlabs_api_key(self._settings)
 
     async def start(self) -> None:
         if not all(

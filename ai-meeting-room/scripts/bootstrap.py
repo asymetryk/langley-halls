@@ -119,11 +119,9 @@ async def main() -> int:
         blockers.append("LiveKit: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET")
 
     # ElevenLabs
-    el_key = settings.elevenlabs_api_key
-    if not el_key:
-        from ai_meeting_room.adapters.secrets import build_secrets_adapter
+    from ai_meeting_room.adapters.secrets import resolve_elevenlabs_api_key
 
-        el_key = await build_secrets_adapter(settings).get_secret(settings.elevenlabs_secret_name) or ""
+    el_key = await resolve_elevenlabs_api_key(settings, required=False)
 
     if el_key:
         ok, msg = await _probe_elevenlabs(el_key)

@@ -10,15 +10,13 @@ import os
 from dotenv import load_dotenv
 from elevenlabs import AsyncElevenLabs
 
-from ai_meeting_room.adapters.secrets import build_secrets_adapter
+from ai_meeting_room.adapters.secrets import resolve_elevenlabs_api_key
 from ai_meeting_room.agents.definitions import ALL_AGENTS
 from ai_meeting_room.config import Settings, get_settings
 
 
 async def _api_key(settings: Settings) -> str:
-    secrets = build_secrets_adapter(settings)
-    key = await secrets.get_secret(settings.elevenlabs_secret_name)
-    return key or settings.elevenlabs_api_key
+    return await resolve_elevenlabs_api_key(settings)
 
 
 def _custom_llm_config(settings: Settings, *, llm_base_url: str) -> dict:
