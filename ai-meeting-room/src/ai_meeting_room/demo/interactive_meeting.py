@@ -25,6 +25,7 @@ from ai_meeting_room.agents.tuning import (
     conversation_prompt_note,
     pick_responder,
 )
+from ai_meeting_room.adapters.secrets import resolve_elevenlabs_api_key
 from ai_meeting_room.config import Settings
 from ai_meeting_room.demo.speak_demo import OUTPUT_RATE, _omniroute_line, _play_pcm, _speak_pcm
 from ai_meeting_room.memory.store import AgentMemory
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 class InteractiveMeeting:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._el = AsyncElevenLabs(api_key=settings.elevenlabs_api_key)
+        self._el: AsyncElevenLabs | None = None
         self._excluded = settings.interactive_excluded_keys()
         self._active_agents = interactive_agents(excluded_keys=self._excluded)
         if not self._active_agents:
@@ -68,6 +69,11 @@ class InteractiveMeeting:
         self._cursor_process_task: asyncio.Task[None] | None = None
         self._conversation = ConversationState(idle_timeout_sec=settings.conversation_idle_sec)
 
+    def _elevenlabs(self) -> AsyncElevenLabs:
+        if self._el is None:
+            raise RuntimeError("ElevenLabs client not ready; meeting has not started")
+        return self._el
+
     def relay_directory(self) -> Path:
         relay_path = Path(self._settings.relay_dir)
         if not relay_path.is_absolute():
@@ -75,6 +81,8 @@ class InteractiveMeeting:
         return relay_path
 
     async def start(self) -> None:
+        api_key = await resolve_elevenlabs_api_key(self._settings)
+        self._el = AsyncElevenLabs(api_key=api_key)
         if self._excluded:
             logger.info("Excluded from call: %s", ", ".join(sorted(self._excluded)))
 
@@ -147,7 +155,7 @@ class InteractiveMeeting:
         if agent_key not in self._rooms:
             raise ValueError(f"{agent_key} is not in the call")
         _room, source, agent = self._rooms[agent_key]
-        pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=text)
+        pcm = await _speak_pcm(self._elevenlabs(), voice_id=agent.voice_id, text=text)
         await _play_pcm(source, pcm)
 
     async def deliver_thread_message(self, text: str, *, speak: bool) -> None:
@@ -414,7 +422,7 @@ class InteractiveMeeting:
             if self._relay:
                 self._relay.log_agent(agent.display_name, reply)
 
-            pcm = await _speak_pcm(self._el, voice_id=agent.voice_id, text=reply)
+            pcm = await _speak_pcm(self._elevenlabs(), voice_id=agent.voice_id, text=reply)
             await _play_pcm(source, pcm)
             self._conversation.touch(key, awaiting_reply=agent_asked_question(reply))
         finally:

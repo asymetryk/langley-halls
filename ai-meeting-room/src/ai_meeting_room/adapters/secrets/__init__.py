@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 
 from ai_meeting_room.config import Settings
+
+logger = logging.getLogger(__name__)
+
+ElevenLabsSource = Literal["baserow", "env", "missing"]
 
 
 class SecretsAdapter(ABC):
@@ -95,8 +102,73 @@ class ChainedSecretsAdapter(SecretsAdapter):
         return None
 
 
-def build_secrets_adapter(settings: Settings) -> SecretsAdapter:
+def build_secrets_adapter(
+    settings: Settings,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> SecretsAdapter:
     return ChainedSecretsAdapter(
-        BaserowSecretsAdapter(settings),
+        BaserowSecretsAdapter(settings, client=client),
         EnvSecretsAdapter(),
     )
+
+
+def _exc_class(exc: BaseException) -> str:
+    name = type(exc).__name__
+    status = getattr(exc, "status_code", None) or getattr(exc, "status", None) or getattr(exc, "code", None)
+    if status is not None:
+        return f"{name} ({status})"
+    return name
+
+
+@dataclass(frozen=True)
+class ElevenLabsKeyLookup:
+    key: str
+    source: ElevenLabsSource
+    baserow_error: str = ""
+
+
+async def lookup_elevenlabs_api_key(
+    settings: Settings,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> ElevenLabsKeyLookup:
+    """Baserow (via secrets adapter) then env. Never logs the key value."""
+    name = settings.elevenlabs_secret_name
+    error = ""
+    if settings.baserow_api_token and settings.baserow_secrets_table_id is not None:
+        try:
+            value = await BaserowSecretsAdapter(settings, client=client).get_secret(name)
+            if value:
+                return ElevenLabsKeyLookup(key=value.strip(), source="baserow")
+        except Exception as exc:
+            error = _exc_class(exc)
+            logger.warning("Baserow ElevenLabs lookup failed: %s", error)
+
+    env_key = (settings.elevenlabs_api_key or "").strip()
+    if not env_key:
+        env_key = (await EnvSecretsAdapter().get_secret(name) or "").strip()
+    if env_key:
+        return ElevenLabsKeyLookup(key=env_key, source="env", baserow_error=error)
+    return ElevenLabsKeyLookup(key="", source="missing", baserow_error=error)
+
+
+async def resolve_elevenlabs_api_key(
+    settings: Settings,
+    *,
+    required: bool = True,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Resolve the ElevenLabs API key: Baserow then env. Does not print the key."""
+    found = await lookup_elevenlabs_api_key(settings, client=client)
+    if found.key:
+        if found.source == "baserow":
+            logger.info("Loaded ElevenLabs API key from secrets adapter")
+        else:
+            logger.info("Using ElevenLabs API key from environment")
+        return found.key
+    if required:
+        raise RuntimeError(
+            "ElevenLabs API key not found. Configure Baserow secrets table or ELEVENLABS_API_KEY."
+        )
+    return ""

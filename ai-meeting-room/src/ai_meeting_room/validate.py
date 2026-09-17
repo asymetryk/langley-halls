@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ai_meeting_room.adapters.secrets import BaserowSecretsAdapter, EnvSecretsAdapter
+from ai_meeting_room.adapters.secrets import lookup_elevenlabs_api_key
 from ai_meeting_room.config import Settings
 
 STATUS_PASS = "pass"
@@ -151,7 +151,7 @@ def elevenlabs_presence(source: ElevenLabsSource) -> CheckResult:
 
 
 def _baserow_lookup_detail(resolution: SecretResolution) -> str:
-    table = resolution.baserow_table_id if resolution.baserow_table_id is not None else "?"
+    table = resolution.baserow_table_id if resolution.baserow_table_id is not None else "unset"
     name = resolution.elevenlabs_secret_name or "(unset)"
     field = resolution.baserow_value_field or "Secret"
     return f"table={table} name={name!r} field={field} (rows only)"
@@ -222,37 +222,13 @@ async def resolve_secrets(
     client: httpx.AsyncClient | None = None,
 ) -> SecretResolution:
     configured = baserow_configured(settings)
-    key = ""
-    source: ElevenLabsSource = "missing"
-    resolved = False
-    error = ""
-
-    if configured:
-        try:
-            value = await BaserowSecretsAdapter(settings, client=client).get_secret(
-                settings.elevenlabs_secret_name
-            )
-            if value:
-                key = value
-                source = "baserow"
-                resolved = True
-        except Exception as exc:
-            error = _error_class(exc)
-
-    if source == "missing":
-        env_key = (settings.elevenlabs_api_key or "").strip()
-        if not env_key:
-            env_key = (await EnvSecretsAdapter().get_secret(settings.elevenlabs_secret_name) or "").strip()
-        if env_key:
-            key = env_key
-            source = "env"
-
+    found = await lookup_elevenlabs_api_key(settings, client=client)
     return SecretResolution(
-        elevenlabs_source=source,
-        elevenlabs_key=key,
+        elevenlabs_source=found.source,
+        elevenlabs_key=found.key,
         baserow_configured=configured,
-        baserow_secret_resolved=resolved,
-        baserow_error=error,
+        baserow_secret_resolved=found.source == "baserow",
+        baserow_error=found.baserow_error,
         elevenlabs_secret_name=settings.elevenlabs_secret_name,
         baserow_table_id=settings.baserow_secrets_table_id,
         baserow_value_field=settings.baserow_secret_value_field,

@@ -11,6 +11,7 @@ from elevenlabs import AsyncElevenLabs
 from livekit import rtc
 
 from ai_meeting_room.adapters.room.livekit_participant import mint_participant_token
+from ai_meeting_room.adapters.secrets import resolve_elevenlabs_api_key
 from ai_meeting_room.agents.definitions import ALL_AGENTS
 from ai_meeting_room.config import Settings
 
@@ -71,12 +72,11 @@ async def _play_pcm(source: rtc.AudioSource, pcm: bytes) -> None:
 
 
 async def run_speak_demo(settings: Settings) -> None:
-    if not settings.elevenlabs_api_key:
-        raise RuntimeError("ELEVENLABS_API_KEY required")
+    api_key = await resolve_elevenlabs_api_key(settings)
     if not settings.omniroute_api_key:
         raise RuntimeError("OMNIROUTE_API_KEY required")
 
-    el = AsyncElevenLabs(api_key=settings.elevenlabs_api_key)
+    el = AsyncElevenLabs(api_key=api_key)
     rooms: list[tuple[str, rtc.Room, rtc.AudioSource]] = []
     transcript: list[str] = []
 

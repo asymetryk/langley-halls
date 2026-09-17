@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         default="https://baserow.tail21f530.ts.net", alias="BASEROW_API_URL"
     )
     baserow_api_token: str = Field(default="", alias="BASEROW_API_TOKEN")
-    baserow_secrets_table_id: int | None = Field(default=828, alias="BASEROW_SECRETS_TABLE_ID")
+    baserow_secrets_table_id: int | None = Field(default=None, alias="BASEROW_SECRETS_TABLE_ID")
     baserow_secret_name_field: str = Field(default="Name", alias="BASEROW_SECRET_NAME_FIELD")
     baserow_secret_value_field: str = Field(default="Secret", alias="BASEROW_SECRET_VALUE_FIELD")
     elevenlabs_secret_name: str = Field(

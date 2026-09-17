@@ -7,7 +7,10 @@ import asyncio
 import httpx
 
 from ai_meeting_room.config import Settings
-from ai_meeting_room.adapters.secrets import BaserowSecretsAdapter
+from ai_meeting_room.adapters.secrets import (
+    BaserowSecretsAdapter,
+    resolve_elevenlabs_api_key,
+)
 from ai_meeting_room.validate import (
     PingOutcome,
     SecretResolution,
@@ -362,7 +365,7 @@ def test_ping_omniroute_401_does_not_leak_body() -> None:
 def test_langley_baserow_defaults_have_no_token() -> None:
     settings = Settings.model_construct()
     assert settings.baserow_api_url == "https://baserow.tail21f530.ts.net"
-    assert settings.baserow_secrets_table_id == 828
+    assert settings.baserow_secrets_table_id is None
     assert settings.baserow_secret_value_field == "Secret"
     assert settings.elevenlabs_secret_name == "elevenlabs langley halls"
     assert settings.baserow_api_token == ""
@@ -495,3 +498,65 @@ def test_validate_baserow_source_uses_correct_name() -> None:
     assert "elevenlabs_api_key" not in text
     assert SECRET_ELEVEN not in text
     assert "baserow_test_token" not in text
+
+
+def test_resolve_elevenlabs_key_from_baserow_when_env_empty() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"results": [{"Name": "elevenlabs langley halls", "Secret": SECRET_ELEVEN}]},
+        )
+
+    async def run() -> str:
+        settings = _complete_settings(
+            elevenlabs_api_key="",
+            baserow_api_token="baserow_test_token_should_never_print",
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await resolve_elevenlabs_api_key(settings, client=client)
+
+    key = asyncio.run(run())
+    assert key == SECRET_ELEVEN
+
+
+def test_resolve_elevenlabs_key_falls_back_to_env() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": []})
+
+    async def run() -> str:
+        settings = _complete_settings(baserow_api_token="baserow_test_token_should_never_print")
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await resolve_elevenlabs_api_key(settings, client=client)
+
+    assert asyncio.run(run()) == SECRET_ELEVEN
+
+
+def test_resolve_elevenlabs_key_raises_when_missing() -> None:
+    async def run() -> None:
+        await resolve_elevenlabs_api_key(_settings())
+
+    try:
+        asyncio.run(run())
+    except RuntimeError as exc:
+        assert "ElevenLabs API key not found" in str(exc)
+        assert SECRET_ELEVEN not in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_unset_table_id_skips_baserow_even_with_token() -> None:
+    async def run() -> SecretResolution:
+        return await resolve_secrets(
+            _complete_settings(
+                elevenlabs_api_key="",
+                baserow_api_token="baserow_test_token_should_never_print",
+                baserow_secrets_table_id=None,
+            )
+        )
+
+    resolution = asyncio.run(run())
+    assert resolution.baserow_configured is False
+    assert resolution.elevenlabs_source == "missing"
+    assert resolution.elevenlabs_key == ""

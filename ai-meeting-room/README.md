@@ -33,7 +33,7 @@ cp .env.example .env
 
 ### 2. Configure secrets
 
-ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`.
+ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`. `validate`, `interactive`, `demo`, and ConvAI `run` all share this adapter chain.
 
 Pocket SoT (self-hosted). Columns are **Name / Notes / Secret / Last modified** — the value is in `Secret`, not `Value`. Langley row Name is `elevenlabs langley halls` (there is no `elevenlabs_api_key` row). Database tokens 401 on `/api/applications/`; only table-row reads work.
 

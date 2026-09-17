@@ -40,10 +40,10 @@ Copy `.env.example` → `.env`. Required for interactive/demo:
 | Variable | Purpose |
 |----------|---------|
 | `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit Cloud room |
-| `ELEVENLABS_API_KEY` | TTS (and ConvAI if revived) |
+| `ELEVENLABS_API_KEY` | TTS fallback if Baserow is unset (and ConvAI if revived) |
 | `OMNIROUTE_BASE_URL` / `OMNIROUTE_API_KEY` / `OMNIROUTE_MODEL` | Reasoning |
 
-Optional: Baserow secrets table for the ElevenLabs key. Defaults: `BASEROW_API_URL=https://baserow.tail21f530.ts.net`, table `828`, value column `Secret`, row name `elevenlabs langley halls`. Set `BASEROW_API_TOKEN` in `.env` only (never commit it). Database tokens 401 on `/api/applications/` — expected; validate reads table rows only. Agent IDs (`ELEVENLABS_AGENT_ID_*`) are only needed for ConvAI `run`.
+Optional: Baserow secrets table for the ElevenLabs key (`interactive` / `demo` / `validate` / ConvAI all use the same adapter chain). Defaults: `BASEROW_API_URL=https://baserow.tail21f530.ts.net`, value column `Secret`, row name `elevenlabs langley halls`. Documented SoT table is `828` (`BASEROW_SECRETS_TABLE_ID` in `.env.example`); if unset, Baserow is skipped. Set `BASEROW_API_TOKEN` in `.env` only (never commit it). Database tokens 401 on `/api/applications/` — expected; we read table rows only. Agent IDs (`ELEVENLABS_AGENT_ID_*`) are only needed for ConvAI `run`.
 
 `main validate` reports LiveKit / ElevenLabs / OmniRoute as `pass` / `fail` / `skip` (ElevenLabs source is `baserow` | `env` | `missing`). It never prints secrets. Exit 0 only when those three are ok.
 
