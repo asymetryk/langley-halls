@@ -6,6 +6,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from ai_meeting_room.relay.participant import is_cursor_or_relay_bound
+
 NAME_ALIASES: dict[str, list[str]] = {
     "fred": ["fred"],
     "missy": ["missy"],
@@ -117,6 +119,7 @@ def pick_responder(
     Choose who should reply, or None if the room should stay quiet.
 
     - Named agent always wins (if they are in the room).
+    - Lines clearly addressed to Cursor or Relay stay quiet (inbox handles them).
     - Room-wide phrases go to the chair.
     - During an active one-on-one, follow-ups go back to the same agent even
       without repeating their name — unless the human names someone else.
@@ -125,6 +128,9 @@ def pick_responder(
     active = active_agents or set(NAME_ALIASES.keys())
     convo = conversation or ConversationState()
     text = transcript.strip()
+
+    if is_cursor_or_relay_bound(text):
+        return None
 
     if closes_conversation(text):
         convo.clear()

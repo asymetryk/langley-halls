@@ -61,3 +61,72 @@ def test_thanks_closes_thread() -> None:
     pick_responder("Missy what do you think?", active_agents=ACTIVE, conversation=convo)
     assert pick_responder("thanks that's all", active_agents=ACTIVE, conversation=convo) is None
     assert pick_responder("maybe we should ship it", active_agents=ACTIVE, conversation=convo) is None
+
+
+def test_cursor_direct_does_not_select_chair() -> None:
+    convo = ConversationState()
+    pick_responder("Project Alpha hello", active_agents=ACTIVE, conversation=convo)
+    assert (
+        pick_responder(
+            "Cursor, can you hear me?",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        is None
+    )
+    assert (
+        pick_responder(
+            "hey Cursor look at the logs",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        is None
+    )
+    assert (
+        pick_responder(
+            "ask Cursor for a summary",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        is None
+    )
+
+
+def test_relay_lines_do_not_select_chair() -> None:
+    convo = ConversationState()
+    pick_responder("Project Alpha hello", active_agents=ACTIVE, conversation=convo)
+    assert (
+        pick_responder(
+            "Relay, are you there?",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        is None
+    )
+    assert (
+        pick_responder(
+            "Relay tell Cursor we need a dashboard",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        is None
+    )
+
+
+def test_room_wide_still_goes_to_chair_when_not_cursor_relay() -> None:
+    convo = ConversationState()
+    pick_responder("Missy hello", active_agents=ACTIVE, conversation=convo)
+    assert (
+        pick_responder(
+            "does everyone agree with that?",
+            default_chair="project_alpha",
+            active_agents=ACTIVE,
+            conversation=convo,
+        )
+        == "project_alpha"
+    )

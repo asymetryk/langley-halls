@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
+from ai_meeting_room.relay.participant import extract_cursor_message, is_cursor_or_relay_bound
 from ai_meeting_room.relay.store import RelayStore
 
 SpeakFn = Callable[[str], Awaitable[None]]
@@ -40,8 +40,8 @@ class RelayBridge:
         self._store.append(kind="system", speaker="Room", text=text)
 
     async def handle_human(self, text: str) -> bool:
-        """Handle speech directed at Relay. Returns True if consumed."""
-        if not is_addressing_relay(text):
+        """Handle speech directed at Cursor or Relay. Returns True if consumed."""
+        if not is_cursor_or_relay_bound(text):
             return False
 
         payload = extract_cursor_message(text) or text

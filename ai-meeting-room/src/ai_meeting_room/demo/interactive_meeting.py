@@ -31,7 +31,7 @@ from ai_meeting_room.memory.store import AgentMemory
 from ai_meeting_room.relay.bridge import RelayBridge
 from ai_meeting_room.relay.cursor_processor import backfill_inbox_from_log, process_cursor_inbox
 from ai_meeting_room.relay.cursor_watcher import CursorInbox, ForwardMode
-from ai_meeting_room.relay.participant import extract_cursor_message, is_addressing_relay
+from ai_meeting_room.relay.participant import is_cursor_or_relay_bound
 from ai_meeting_room.relay.store import RelayStore
 from ai_meeting_room.room.controller import RoomController
 from ai_meeting_room.stt.normalize import default_stt_keyterms, normalize_transcript
@@ -354,14 +354,11 @@ class InteractiveMeeting:
             await self._execute_host_command(host_cmd)
             return
 
-        if self._relay and RELAY.key not in self._muted_keys:
-            if await self._relay.handle_human(text):
-                return
-        elif self._relay and is_addressing_relay(text):
-            # Muted: still log to Cursor thread, but never speak or block other agents.
-            payload = extract_cursor_message(text) or text
-            self._relay.store.append(kind="thread_out", speaker="You", text=payload)
-            logger.info("Relay muted — logged without speaking: %s", text[:80])
+        if self._relay and is_cursor_or_relay_bound(text):
+            # Cursor/Relay-addressed lines never go to pick_responder / chair.
+            # Same inbox path as the old muted-Relay log: thread_out, no agent speaks.
+            await self._relay.handle_human(text)
+            logger.info("Cursor/Relay bound — logged without speaking: %s", text[:80])
             return
 
         if self._paused:
