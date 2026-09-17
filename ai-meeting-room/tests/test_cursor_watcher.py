@@ -9,6 +9,7 @@ from ai_meeting_room.relay.cursor_watcher import CursorInbox, is_for_cursor
 def test_is_for_cursor_relay_mode() -> None:
     assert is_for_cursor("Relay tell Cursor hello", mode="relay")
     assert is_for_cursor("Cursor, are you there?", mode="relay")
+    assert is_for_cursor("ask Cursor for a summary", mode="relay")
     assert not is_for_cursor("Missy what do you think?", mode="relay")
 
 

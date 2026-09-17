@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from ai_meeting_room.relay.participant import is_addressing_relay
+from ai_meeting_room.relay.participant import is_cursor_or_relay_bound
 
 ForwardMode = Literal["relay", "all"]
-
-CURSOR_ADDRESS = re.compile(r"^(?:hey\s+)?cursor\b", re.IGNORECASE)
-TELL_CURSOR = re.compile(r"\btell\s+cursor\b", re.IGNORECASE)
 
 
 @dataclass
@@ -34,14 +30,7 @@ class CursorInboxMessage:
 def is_for_cursor(text: str, *, mode: ForwardMode) -> bool:
     if mode == "all":
         return True
-    if is_addressing_relay(text):
-        return True
-    stripped = text.strip()
-    if CURSOR_ADDRESS.match(stripped):
-        return True
-    if TELL_CURSOR.search(stripped):
-        return True
-    return False
+    return is_cursor_or_relay_bound(text)
 
 
 class CursorInbox:
