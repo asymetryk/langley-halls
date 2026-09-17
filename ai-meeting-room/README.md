@@ -88,10 +88,15 @@ python -m ai_meeting_room.server.token_server --identity host --name "You"
 
 Join the room with [LiveKit Meet](https://meet.livekit.io/) or your own client using `LIVEKIT_URL`, room name `ai-meeting-room`, and the token.
 
-### Validate configuration
+### Validate configuration (interactive secrets)
+
+`validate` checks the **interactive** path: LiveKit, ElevenLabs TTS, and OmniRoute.
+It prints `pass` / `fail` / `skip` only — never key material. Exit **1** if any of
+those three required checks fail; ConvAI agent IDs are optional (`main run` only).
 
 ```bash
-python -m ai_meeting_room.main validate
+python -m ai_meeting_room.main validate           # presence + cheap pings
+python -m ai_meeting_room.main validate --offline # presence only (no network)
 ```
 
 ## Project layout

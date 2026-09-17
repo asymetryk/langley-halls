@@ -14,7 +14,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 cp .env.example .env   # fill LiveKit + ElevenLabs + OmniRoute (see below)
-python -m ai_meeting_room.main validate
+python -m ai_meeting_room.main validate          # exit 1 if LiveKit / ElevenLabs / OmniRoute missing
+# python -m ai_meeting_room.main validate --offline  # keys only; skip network pings
 python -m ai_meeting_room.main interactive
 ```
 
@@ -44,13 +45,15 @@ Copy `.env.example` → `.env`. Required for interactive/demo:
 
 Optional: Baserow secrets table for the ElevenLabs key (`BASEROW_*`, `ELEVENLABS_SECRET_NAME`). Agent IDs (`ELEVENLABS_AGENT_ID_*`) are only needed for ConvAI `run`.
 
+`main validate` reports LiveKit / ElevenLabs / OmniRoute as `pass` / `fail` / `skip` (ElevenLabs source is `baserow` | `env` | `missing`). It never prints secrets. Exit 0 only when those three are ok.
+
 Do not commit `.env`.
 
 ## Commands
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `main validate` | Supported | Config / adapter check |
+| `main validate` | Supported | Interactive secrets: LiveKit, ElevenLabs, OmniRoute. Exit 1 if any required check fails. `--offline` skips network pings. |
 | `main interactive` | **Supported demo** | Mic + dashboard + relay |
 | `main demo` | Supported | Scripted TTS into room |
 | `main room …` | Supported | Host controls while interactive runs |
