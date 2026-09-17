@@ -7,16 +7,20 @@ import asyncio
 import httpx
 
 from ai_meeting_room.config import Settings
+from ai_meeting_room.adapters.secrets import BaserowSecretsAdapter
 from ai_meeting_room.validate import (
     PingOutcome,
     SecretResolution,
     apply_ping,
     elevenlabs_presence,
     format_report,
+    livekit_http_url,
     livekit_presence,
     omniroute_presence,
     ping_elevenlabs,
+    ping_livekit,
     ping_omniroute,
+    resolve_secrets,
     validate_config,
 )
 
@@ -41,9 +45,12 @@ def _settings(**overrides: object) -> Settings:
         "omniroute_base_url": "https://omniroute.example",
         "omniroute_api_key": "",
         "omniroute_model": "codex/gpt-5.6-sol",
+        "baserow_api_url": "https://baserow.tail21f530.ts.net",
         "baserow_api_token": "",
-        "baserow_secrets_table_id": None,
-        "elevenlabs_secret_name": "elevenlabs_api_key",
+        "baserow_secrets_table_id": 828,
+        "baserow_secret_name_field": "Name",
+        "baserow_secret_value_field": "Secret",
+        "elevenlabs_secret_name": "elevenlabs langley halls",
     }
     values.update(overrides)
     return Settings.model_construct(**values)
@@ -68,6 +75,9 @@ async def _env_secrets(settings: Settings) -> SecretResolution:
         elevenlabs_key=settings.elevenlabs_api_key,
         baserow_configured=False,
         baserow_secret_resolved=False,
+        elevenlabs_secret_name=settings.elevenlabs_secret_name,
+        baserow_table_id=settings.baserow_secrets_table_id,
+        baserow_value_field=settings.baserow_secret_value_field,
     )
 
 
@@ -236,6 +246,9 @@ def test_baserow_resolved_source_and_status() -> None:
             elevenlabs_key=SECRET_ELEVEN,
             baserow_configured=True,
             baserow_secret_resolved=True,
+            elevenlabs_secret_name="elevenlabs langley halls",
+            baserow_table_id=828,
+            baserow_value_field="Secret",
         )
 
     report = asyncio.run(
@@ -249,6 +262,9 @@ def test_baserow_resolved_source_and_status() -> None:
     assert services["ElevenLabs"].detail == "source=baserow"
     assert services["Baserow"].status == "pass"
     assert "resolved" in services["Baserow"].detail
+    assert "name='elevenlabs langley halls'" in services["Baserow"].detail
+    assert "field=Secret" in services["Baserow"].detail
+    assert "table=828" in services["Baserow"].detail
     assert SECRET_ELEVEN not in format_report(report)
 
 
@@ -341,3 +357,141 @@ def test_ping_omniroute_401_does_not_leak_body() -> None:
     assert outcome.error_class == "HTTP 401"
     assert SECRET_BODY not in outcome.error_class
     assert SECRET_OMNI not in outcome.error_class
+
+
+def test_langley_baserow_defaults_have_no_token() -> None:
+    settings = Settings.model_construct()
+    assert settings.baserow_api_url == "https://baserow.tail21f530.ts.net"
+    assert settings.baserow_secrets_table_id == 828
+    assert settings.baserow_secret_value_field == "Secret"
+    assert settings.elevenlabs_secret_name == "elevenlabs langley halls"
+    assert settings.baserow_api_token == ""
+
+
+def test_livekit_http_url_converts_wss() -> None:
+    assert livekit_http_url("wss://example.livekit.cloud") == "https://example.livekit.cloud"
+    assert livekit_http_url("https://example.livekit.cloud") == "https://example.livekit.cloud"
+
+
+def test_ping_livekit_list_rooms_status_not_body() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization", "")
+        assert request.url.path.endswith("/twirp/livekit.RoomService/ListRooms")
+        assert request.url.scheme == "https"
+        return httpx.Response(401, text=SECRET_BODY)
+
+    async def run() -> PingOutcome:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await ping_livekit(_complete_settings(), client=client)
+
+    outcome = asyncio.run(run())
+    assert outcome.ok is False
+    assert outcome.error_class == "HTTP 401"
+    assert SECRET_BODY not in outcome.error_class
+    assert SECRET_LIVEKIT_KEY not in outcome.error_class
+    assert SECRET_LIVEKIT_SECRET not in outcome.error_class
+    assert captured["auth"].startswith("Bearer ")
+    assert SECRET_LIVEKIT_SECRET not in captured["url"]
+
+
+def test_ping_livekit_200() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        return httpx.Response(200, json={"rooms": []})
+
+    async def run() -> PingOutcome:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await ping_livekit(_complete_settings(), client=client)
+
+    assert asyncio.run(run()).ok is True
+
+
+def test_resolve_secrets_reads_secret_column_not_value() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["url"] = str(request.url)
+        assert "/api/applications/" not in request.url.path
+        assert request.url.path == "/api/database/rows/table/828/"
+        assert "elevenlabs%20langley%20halls" in str(request.url) or "elevenlabs langley halls" in str(
+            request.url
+        )
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "Name": "elevenlabs langley halls",
+                        "Notes": "",
+                        "Secret": SECRET_ELEVEN,
+                        "Value": "wrong-column-must-be-ignored",
+                    }
+                ]
+            },
+        )
+
+    async def run() -> SecretResolution:
+        settings = _complete_settings(
+            elevenlabs_api_key="",
+            baserow_api_token="baserow_test_token_should_never_print",
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await resolve_secrets(settings, client=client)
+
+    resolution = asyncio.run(run())
+    assert resolution.elevenlabs_source == "baserow"
+    assert resolution.baserow_secret_resolved is True
+    assert resolution.elevenlabs_key == SECRET_ELEVEN
+    assert resolution.baserow_value_field == "Secret"
+    assert resolution.elevenlabs_secret_name == "elevenlabs langley halls"
+    assert captured["path"] == "/api/database/rows/table/828/"
+    adapter = BaserowSecretsAdapter(
+        _complete_settings(baserow_api_token="baserow_test_token_should_never_print")
+    )
+    assert "/api/applications/" not in adapter.rows_url("elevenlabs langley halls")
+
+
+def test_resolve_secrets_env_fallback_when_baserow_row_missing() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": []})
+
+    async def run() -> SecretResolution:
+        settings = _complete_settings(baserow_api_token="baserow_test_token_should_never_print")
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await resolve_secrets(settings, client=client)
+
+    resolution = asyncio.run(run())
+    assert resolution.elevenlabs_source == "env"
+    assert resolution.baserow_secret_resolved is False
+    assert resolution.elevenlabs_key == SECRET_ELEVEN
+
+
+def test_validate_baserow_source_uses_correct_name() -> None:
+    async def resolve(_settings: Settings) -> SecretResolution:
+        return SecretResolution(
+            elevenlabs_source="baserow",
+            elevenlabs_key=SECRET_ELEVEN,
+            baserow_configured=True,
+            baserow_secret_resolved=True,
+            elevenlabs_secret_name="elevenlabs langley halls",
+            baserow_table_id=828,
+            baserow_value_field="Secret",
+        )
+
+    report = asyncio.run(
+        validate_config(_complete_settings(elevenlabs_api_key=""), offline=True, resolve=resolve)
+    )
+    text = format_report(report)
+    assert "source=baserow" in text
+    assert "elevenlabs langley halls" in text
+    assert "elevenlabs_api_key" not in text
+    assert SECRET_ELEVEN not in text
+    assert "baserow_test_token" not in text

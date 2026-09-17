@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import httpx
+
 from ai_meeting_room.config import Settings
 
 
@@ -24,19 +26,19 @@ class EnvSecretsAdapter(SecretsAdapter):
 
 
 class BaserowSecretsAdapter(SecretsAdapter):
-    """Read secrets from a Baserow table (Name / Value columns)."""
+    """Read secrets from a Baserow table (Name / Secret columns).
 
-    def __init__(self, settings: Settings) -> None:
+    Only table-row reads are used. Database tokens 401 on /api/applications/;
+    do not call that endpoint.
+    """
+
+    def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
+        self._client = client
 
-    async def get_secret(self, name: str) -> str | None:
-        if not self._settings.baserow_api_token or not self._settings.baserow_secrets_table_id:
-            return None
-
+    def rows_url(self, name: str) -> str:
         import json
         from urllib.parse import quote
-
-        import httpx
 
         filters = {
             "filter_type": "AND",
@@ -49,16 +51,26 @@ class BaserowSecretsAdapter(SecretsAdapter):
             ],
         }
         table_id = self._settings.baserow_secrets_table_id
-        url = (
+        return (
             f"{self._settings.baserow_api_url.rstrip('/')}/api/database/rows/table/{table_id}/"
             f"?user_field_names=true&size=1&filters={quote(json.dumps(filters))}"
         )
-        headers = {"Authorization": f"Token {self._settings.baserow_api_token}"}
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+    async def get_secret(self, name: str) -> str | None:
+        if not self._settings.baserow_api_token or not self._settings.baserow_secrets_table_id:
+            return None
+
+        headers = {"Authorization": f"Token {self._settings.baserow_api_token}"}
+        url = self.rows_url(name)
+        own_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=15.0)
+        try:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             rows = response.json().get("results", [])
+        finally:
+            if own_client:
+                await client.aclose()
 
         if not rows:
             return None

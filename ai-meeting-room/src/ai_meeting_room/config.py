@@ -42,12 +42,18 @@ class Settings(BaseSettings):
     omniroute_api_key: str = Field(default="", alias="OMNIROUTE_API_KEY")
     omniroute_model: str = Field(default="codex/gpt-5.6-sol", alias="OMNIROUTE_MODEL")
 
-    baserow_api_url: str = Field(default="https://api.baserow.io", alias="BASEROW_API_URL")
+    # Pocket Baserow SoT (self-hosted). Database tokens 401 on /api/applications/;
+    # only table-row reads are valid. Do not put BASEROW_API_TOKEN in the repo.
+    baserow_api_url: str = Field(
+        default="https://baserow.tail21f530.ts.net", alias="BASEROW_API_URL"
+    )
     baserow_api_token: str = Field(default="", alias="BASEROW_API_TOKEN")
-    baserow_secrets_table_id: int | None = Field(default=None, alias="BASEROW_SECRETS_TABLE_ID")
+    baserow_secrets_table_id: int | None = Field(default=828, alias="BASEROW_SECRETS_TABLE_ID")
     baserow_secret_name_field: str = Field(default="Name", alias="BASEROW_SECRET_NAME_FIELD")
-    baserow_secret_value_field: str = Field(default="Value", alias="BASEROW_SECRET_VALUE_FIELD")
-    elevenlabs_secret_name: str = Field(default="elevenlabs_api_key", alias="ELEVENLABS_SECRET_NAME")
+    baserow_secret_value_field: str = Field(default="Secret", alias="BASEROW_SECRET_VALUE_FIELD")
+    elevenlabs_secret_name: str = Field(
+        default="elevenlabs langley halls", alias="ELEVENLABS_SECRET_NAME"
+    )
 
     user_input_rate: int = 16000
     agent_output_rate: int = 24000

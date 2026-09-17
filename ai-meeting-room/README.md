@@ -33,20 +33,25 @@ cp .env.example .env
 
 ### 2. Configure secrets
 
-ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`:
+ElevenLabs API key is loaded from the **Baserow secrets table** first, then falls back to `ELEVENLABS_API_KEY`.
+
+Pocket SoT (self-hosted). Columns are **Name / Notes / Secret / Last modified** — the value is in `Secret`, not `Value`. Langley row Name is `elevenlabs langley halls` (there is no `elevenlabs_api_key` row). Database tokens 401 on `/api/applications/`; only table-row reads work.
 
 | Baserow column | Example |
 |----------------|---------|
-| Name | `elevenlabs_api_key` |
-| Value | `sk_…` |
+| Name | `elevenlabs langley halls` |
+| Secret | (API key; do not commit) |
+| Notes | optional |
+| Last modified | system |
 
-Environment:
+Environment (token from env only — never commit `BASEROW_API_TOKEN`):
 
 ```bash
-BASEROW_API_URL=https://api.baserow.io
-BASEROW_API_TOKEN=…
-BASEROW_SECRETS_TABLE_ID=12345
-ELEVENLABS_SECRET_NAME=elevenlabs_api_key
+BASEROW_API_URL=https://baserow.tail21f530.ts.net
+BASEROW_API_TOKEN=          # set in .env, not in git
+BASEROW_SECRETS_TABLE_ID=828
+BASEROW_SECRET_VALUE_FIELD=Secret
+ELEVENLABS_SECRET_NAME=elevenlabs langley halls
 ```
 
 ### 3. Start reasoning API (Custom LLM for ElevenLabs)

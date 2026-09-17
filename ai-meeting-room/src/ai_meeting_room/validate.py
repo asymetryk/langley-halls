@@ -5,8 +5,14 @@ Reports status only — never key material, tokens, or response bodies.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Literal
+from urllib.parse import urlparse
 
 import httpx
 
@@ -23,6 +29,7 @@ ElevenLabsSource = Literal["baserow", "env", "missing"]
 ELEVENLABS_USER_URL = "https://api.elevenlabs.io/v1/user/subscription"
 OMNIROUTE_MODELS_PATH = "/v1/models"
 OMNIROUTE_HEALTH_PATH = "/health"
+LIVEKIT_LIST_ROOMS_PATH = "/twirp/livekit.RoomService/ListRooms"
 
 CONVAI_AGENTS: tuple[tuple[str, str], ...] = (
     ("Fred", "elevenlabs_agent_id_fred"),
@@ -53,6 +60,9 @@ class SecretResolution:
     baserow_configured: bool
     baserow_secret_resolved: bool
     baserow_error: str = ""
+    elevenlabs_secret_name: str = ""
+    baserow_table_id: int | None = None
+    baserow_value_field: str = ""
 
 
 @dataclass
@@ -140,18 +150,37 @@ def elevenlabs_presence(source: ElevenLabsSource) -> CheckResult:
     return CheckResult("ElevenLabs", STATUS_PASS, f"source={source}", required=True)
 
 
+def _baserow_lookup_detail(resolution: SecretResolution) -> str:
+    table = resolution.baserow_table_id if resolution.baserow_table_id is not None else "?"
+    name = resolution.elevenlabs_secret_name or "(unset)"
+    field = resolution.baserow_value_field or "Secret"
+    return f"table={table} name={name!r} field={field} (rows only)"
+
+
 def baserow_status(resolution: SecretResolution) -> CheckResult:
     if not resolution.baserow_configured:
-        return CheckResult("Baserow", STATUS_SKIP, "not configured")
+        return CheckResult(
+            "Baserow",
+            STATUS_SKIP,
+            f"not configured (set BASEROW_API_TOKEN; {_baserow_lookup_detail(resolution)})",
+        )
     if resolution.baserow_secret_resolved:
-        return CheckResult("Baserow", STATUS_PASS, "configured; elevenlabs secret name resolved")
+        return CheckResult(
+            "Baserow",
+            STATUS_PASS,
+            f"configured; elevenlabs secret name resolved; {_baserow_lookup_detail(resolution)}",
+        )
     if resolution.baserow_error:
         return CheckResult(
             "Baserow",
             STATUS_SKIP,
-            f"configured; lookup failed: {resolution.baserow_error}",
+            f"configured; lookup failed: {resolution.baserow_error}; {_baserow_lookup_detail(resolution)}",
         )
-    return CheckResult("Baserow", STATUS_SKIP, "configured; elevenlabs secret name not resolved")
+    return CheckResult(
+        "Baserow",
+        STATUS_SKIP,
+        f"configured; elevenlabs secret name not resolved; {_baserow_lookup_detail(resolution)}",
+    )
 
 
 def convai_agent_checks(settings: Settings) -> list[CheckResult]:
@@ -187,7 +216,11 @@ def baserow_configured(settings: Settings) -> bool:
     return _present(settings.baserow_api_token) and settings.baserow_secrets_table_id is not None
 
 
-async def resolve_secrets(settings: Settings) -> SecretResolution:
+async def resolve_secrets(
+    settings: Settings,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> SecretResolution:
     configured = baserow_configured(settings)
     key = ""
     source: ElevenLabsSource = "missing"
@@ -196,7 +229,9 @@ async def resolve_secrets(settings: Settings) -> SecretResolution:
 
     if configured:
         try:
-            value = await BaserowSecretsAdapter(settings).get_secret(settings.elevenlabs_secret_name)
+            value = await BaserowSecretsAdapter(settings, client=client).get_secret(
+                settings.elevenlabs_secret_name
+            )
             if value:
                 key = value
                 source = "baserow"
@@ -218,34 +253,78 @@ async def resolve_secrets(settings: Settings) -> SecretResolution:
         baserow_configured=configured,
         baserow_secret_resolved=resolved,
         baserow_error=error,
+        elevenlabs_secret_name=settings.elevenlabs_secret_name,
+        baserow_table_id=settings.baserow_secrets_table_id,
+        baserow_value_field=settings.baserow_secret_value_field,
     )
 
 
-async def ping_livekit(settings: Settings) -> PingOutcome:
-    try:
-        from livekit import api
-    except Exception as exc:
-        return PingOutcome(ok=False, error_class=_error_class(exc))
+def livekit_http_url(livekit_url: str) -> str:
+    parsed = urlparse((livekit_url or "").strip())
+    scheme = parsed.scheme.lower()
+    if scheme == "wss":
+        scheme = "https"
+    elif scheme == "ws":
+        scheme = "http"
+    elif scheme not in {"http", "https"}:
+        scheme = "https"
+    host = parsed.netloc or parsed.path
+    return f"{scheme}://{host}".rstrip("/")
 
-    lkapi = None
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def livekit_list_rooms_jwt(api_key: str, api_secret: str, *, ttl_sec: int = 60) -> str:
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "iss": api_key,
+        "sub": "ai-meeting-room-validate",
+        "nbf": now,
+        "exp": now + ttl_sec,
+        "video": {"roomList": True},
+    }
+    signing = (
+        f"{_b64url(json.dumps(header, separators=(',', ':')).encode())}."
+        f"{_b64url(json.dumps(payload, separators=(',', ':')).encode())}"
+    )
+    signature = hmac.new(api_secret.encode(), signing.encode(), hashlib.sha256).digest()
+    return f"{signing}.{_b64url(signature)}"
+
+
+def _http_ok(status_code: int) -> bool:
+    return 200 <= status_code < 300
+
+
+async def ping_livekit(
+    settings: Settings,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> PingOutcome:
+    http_url = livekit_http_url(settings.livekit_url)
+    token = livekit_list_rooms_jwt(settings.livekit_api_key, settings.livekit_api_secret)
+    own_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(timeout=10.0)
     try:
-        lkapi = api.LiveKitAPI(
-            settings.livekit_url,
-            settings.livekit_api_key,
-            settings.livekit_api_secret,
+        response = await client.post(
+            f"{http_url}{LIVEKIT_LIST_ROOMS_PATH}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            content=b"{}",
         )
-        list_rooms = getattr(api, "ListRoomsRequest", None)
-        if list_rooms is None:
-            list_rooms = api.proto_room.ListRoomsRequest
-        await lkapi.room.list_rooms(list_rooms())
-        return PingOutcome(ok=True)
+        if _http_ok(response.status_code):
+            return PingOutcome(ok=True)
+        return PingOutcome(ok=False, error_class=f"HTTP {response.status_code}")
     except Exception as exc:
         return PingOutcome(ok=False, error_class=_error_class(exc))
     finally:
-        if lkapi is not None:
-            close = getattr(lkapi, "aclose", None)
-            if close is not None:
-                await close()
+        if own_client:
+            await client.aclose()
 
 
 async def ping_elevenlabs(
@@ -259,7 +338,7 @@ async def ping_elevenlabs(
         client = httpx.AsyncClient(timeout=10.0)
     try:
         response = await client.get(ELEVENLABS_USER_URL, headers=headers)
-        if response.status_code == 200:
+        if _http_ok(response.status_code):
             return PingOutcome(ok=True)
         return PingOutcome(ok=False, error_class=f"HTTP {response.status_code}")
     except Exception as exc:
@@ -281,11 +360,11 @@ async def ping_omniroute(
         client = httpx.AsyncClient(timeout=10.0)
     try:
         models = await client.get(f"{base}{OMNIROUTE_MODELS_PATH}", headers=headers)
-        if models.status_code == 200:
+        if _http_ok(models.status_code):
             return PingOutcome(ok=True)
         if models.status_code == 404:
             health = await client.get(f"{base}{OMNIROUTE_HEALTH_PATH}", headers=headers)
-            if health.status_code == 200:
+            if _http_ok(health.status_code):
                 return PingOutcome(ok=True)
             return PingOutcome(ok=False, error_class=f"HTTP {health.status_code}")
         return PingOutcome(ok=False, error_class=f"HTTP {models.status_code}")
