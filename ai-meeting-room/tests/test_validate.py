@@ -79,6 +79,12 @@ async def _fail_ping(*_args: object, **_kwargs: object) -> PingOutcome:
     return PingOutcome(ok=False, error_class="HTTP 401")
 
 
+def test_validate_cli_imports_without_livekit_or_elevenlabs() -> None:
+    from ai_meeting_room.main import _cmd_validate
+
+    assert _cmd_validate is not None
+
+
 def test_livekit_presence_fails_when_keys_missing() -> None:
     result = livekit_presence(_settings())
     assert result.status == "fail"
@@ -268,6 +274,8 @@ def test_format_report_never_includes_secret_material() -> None:
     assert "LiveKit (required for interactive)" in text
     assert "ElevenLabs (required for interactive TTS)" in text
     assert "OmniRoute (required for interactive reasoning)" in text
+    assert "Fred: skip" in text
+    assert "Missy: skip" in text
 
 
 def test_ping_elevenlabs_reports_status_not_body() -> None:

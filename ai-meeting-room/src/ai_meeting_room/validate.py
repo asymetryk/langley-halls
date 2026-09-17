@@ -318,7 +318,8 @@ def format_report(report: ValidationReport) -> str:
         "ConvAI agent IDs (optional / parked — main run only)",
     ]
     for label, _field in CONVAI_AGENTS:
-        lines.append(_format_check(_find(report, f"ConvAI {label}")))
+        check = _find(report, f"ConvAI {label}")
+        lines.append(f"  {label}: {check.status}  {check.detail}")
     lines.extend(
         [
             "-" * 44,

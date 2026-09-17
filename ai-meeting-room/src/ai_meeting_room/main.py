@@ -7,13 +7,9 @@ import asyncio
 import logging
 import sys
 
-import httpx
-import uvicorn
 from dotenv import load_dotenv
 
 from ai_meeting_room.config import get_settings
-from ai_meeting_room.orchestrator import MeetingOrchestrator
-from ai_meeting_room.server.reasoning_api import create_reasoning_app
 from ai_meeting_room.validate import format_report, validate_config
 
 
@@ -25,6 +21,8 @@ def _configure_logging(verbose: bool) -> None:
 
 
 async def _cmd_validate(*, offline: bool = False) -> int:
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     settings = get_settings()
     report = await validate_config(settings, offline=offline)
     print(format_report(report))
@@ -32,6 +30,8 @@ async def _cmd_validate(*, offline: bool = False) -> int:
 
 
 async def _cmd_run() -> int:
+    from ai_meeting_room.orchestrator import MeetingOrchestrator
+
     orchestrator = MeetingOrchestrator(get_settings())
     try:
         await orchestrator.run_until_cancelled()
@@ -81,6 +81,10 @@ async def _cmd_demo() -> int:
 
 
 def _cmd_reasoning_api() -> int:
+    import uvicorn
+
+    from ai_meeting_room.server.reasoning_api import create_reasoning_app
+
     settings = get_settings()
     app = create_reasoning_app()
     uvicorn.run(app, host=settings.reasoning_api_host, port=settings.reasoning_api_port, log_level="info")
@@ -88,6 +92,8 @@ def _cmd_reasoning_api() -> int:
 
 
 async def _cmd_room(args: argparse.Namespace) -> int:
+    import httpx
+
     from ai_meeting_room.room.client import RoomControlClient, format_status, print_result
 
     settings = get_settings()
